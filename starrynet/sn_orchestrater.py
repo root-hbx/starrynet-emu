@@ -8,8 +8,41 @@ Used in the remote machine for link updating, initializing links, damaging and r
 author: Yangtao Deng (dengyt21@mails.tsinghua.edu.cn) and Zeqi Lai (zeqilai@tsinghua.edu.cn) 
 """
 
+"""
+NOTE:
+
+(1) IP:
+
+ISL: 10.x.x.0/24
+    Intra-orbit ISL:
+        sat: .40
+        down_sat: .10
+    Inter-orbit ISL:
+        sat: .30
+        right_sat: .20
+GSL: 9.x.x.0/24
+    Satellite: .50
+    GS: .60
+
+(2) Calling conventions:
+
+Network Name: 
+    La_{current_sat_id}-{current_orbit_id}_{right_sat_id}-{right_orbit_id}  (inter-orbit ISL)
+    Le_{current_sat_id}-{current_orbit_id}_{down_sat_id}-{down_orbit_id}   (intra-orbit ISL)
+    GSL_{sat_id}-{GS_id}                                                 (GSL)
+
+sNetwork Interface: 
+    B{global_id}-eth{peer_global_id}
+
+Config Files:
+    B{global_id}.conf
+"""
+
 
 def sn_get_right_satellite(current_sat_id, current_orbit_id, orbit_num):
+    # if the current orbit is the last,
+    # connect to the first orbit.
+    # else connect to the next orbit.
     if current_orbit_id == orbit_num - 1:
         return [current_sat_id, 0]
     else:
@@ -17,6 +50,9 @@ def sn_get_right_satellite(current_sat_id, current_orbit_id, orbit_num):
 
 
 def sn_get_down_satellite(current_sat_id, current_orbit_id, sat_num):
+    # if the current satellite is the last one in the orbit
+    # connect to the first satellite in the same orbit.
+    # else connect to the next intra-orbit satellite.
     if current_sat_id == sat_num - 1:
         return [0, current_orbit_id]
     else:
@@ -25,10 +61,29 @@ def sn_get_down_satellite(current_sat_id, current_orbit_id, sat_num):
 
 def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
                      orbit_num, sat_num, constellation_size, matrix, bw, loss):
+    """
+    Establish ISLs for a specific satellite
+    
+    ISL: 10.x.x.0/24
+    Intra-orbit ISL:
+        sat: .40
+        down_sat: .10
+    Inter-orbit ISL:
+        sat: .30
+        right_sat: .20
+    
+    """
+    
     current_id = current_orbit_id * sat_num + current_sat_id
+    
+    # Global-ID: ISL index
     isl_idx = current_id * 2 + 1
-    # Establish intra-orbit ISLs
+    
+    # ===========================================
+    # Establish intra-orbit ISLs.
     # (Down):
+    # ===========================================
+    
     [down_sat_id,
      down_orbit_id] = sn_get_down_satellite(current_sat_id, current_orbit_id,
                                             sat_num)
@@ -40,18 +95,38 @@ def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
         "_" + str(down_sat_id) + "-" + str(down_orbit_id)
     address_16_23 = isl_idx >> 8
     address_8_15 = isl_idx & 0xff
+    
     # Create internal network in docker.
     os.system('docker network create ' + ISL_name + " --subnet 10." +
               str(address_16_23) + "." + str(address_8_15) + ".0/24")
     print('[Create ISL:]' + 'docker network create ' + ISL_name +
           " --subnet 10." + str(address_16_23) + "." + str(address_8_15) +
           ".0/24")
+    
+    # Connect current satellite to the ISL network.
+    # And Assign IP address to the interface.
     os.system('docker network connect ' + ISL_name + " " +
               str(container_id_list[current_orbit_id * sat_num +
                                     current_sat_id]) + " --ip 10." +
               str(address_16_23) + "." + str(address_8_15) + ".40")
+    
+    # Interface configuration and traffic control.
+    # Traffic Matrix is the key!
     delay = matrix[current_orbit_id * sat_num +
                    current_sat_id][down_orbit_id * sat_num + down_sat_id]
+    
+    # The following operations are divided into two parts:
+    # (1) current satellite: 10.x.x.40
+    # (2) down satellite: 10.x.x.10
+    #
+    # The Scenario is as follows:
+    # B1-eth2 <-------- Docker Bridge Network --------> B2-eth1
+    # current_sat              ISL_Name                 down_sat
+    
+    # =============================================
+    # Current sat IP: 10.x.x.40
+    # =============================================
+    # (1) Get the interface name
     with os.popen(
             "docker exec -it " +
             str(container_id_list[current_orbit_id * sat_num +
@@ -61,6 +136,8 @@ def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
             ".40 | head -n 1 | awk -F: '{ print $2 }' | tr -d [:blank:]") as f:
         ifconfig_output = f.readline()
         target_interface = str(ifconfig_output).split("@")[0]
+        # (2) Down and then rename the interface
+        # Standard naming: B{global_id}-eth{peer_global_id}
         os.system("docker exec -d " +
                   str(container_id_list[current_orbit_id * sat_num +
                                         current_sat_id]) +
@@ -71,6 +148,7 @@ def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
                   " ip link set dev " + target_interface + " name " + "B" +
                   str(current_orbit_id * sat_num + current_sat_id + 1) +
                   "-eth" + str(down_orbit_id * sat_num + down_sat_id + 1))
+        # (3) Up the interface
         os.system("docker exec -d " +
                   str(container_id_list[current_orbit_id * sat_num +
                                         current_sat_id]) +
@@ -78,6 +156,8 @@ def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
                   str(current_orbit_id * sat_num + current_sat_id + 1) +
                   "-eth" + str(down_orbit_id * sat_num + down_sat_id + 1) +
                   " up")
+        # (4) Traffic control settings
+        # TODO(bxhu): delay + loss + bandwidth. can be customized
         os.system("docker exec -d " +
                   str(container_id_list[current_orbit_id * sat_num +
                                         current_sat_id]) +
@@ -92,6 +172,11 @@ def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
               str(container_id_list[down_orbit_id * sat_num + down_sat_id]) +
               " --ip 10." + str(address_16_23) + "." + str(address_8_15) +
               ".10")
+    
+    # =============================================
+    # Down sat IP: 10.x.x.10
+    # =============================================
+    # (1) Get the interface name
     with os.popen(
             "docker exec -it " +
             str(container_id_list[down_orbit_id * sat_num + down_sat_id]) +
@@ -100,6 +185,8 @@ def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
             ".10 | head -n 1 | awk -F: '{ print $2 }' | tr -d [:blank:]") as f:
         ifconfig_output = f.readline()
         target_interface = str(ifconfig_output).split("@")[0]
+        # (2) Down and then rename the interface
+        # Standard naming: B{global_id}-eth{peer_global_id}
         os.system("docker exec -d " +
                   str(container_id_list[down_orbit_id * sat_num +
                                         down_sat_id]) + " ip link set dev " +
@@ -110,11 +197,13 @@ def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
                   target_interface + " name " + "B" +
                   str(down_orbit_id * sat_num + down_sat_id + 1) + "-eth" +
                   str(current_orbit_id * sat_num + current_sat_id + 1))
+        # (3) Up the interface
         os.system("docker exec -d " +
                   str(container_id_list[down_orbit_id * sat_num +
                                         down_sat_id]) + " ip link set dev B" +
                   str(down_orbit_id * sat_num + down_sat_id + 1) + "-eth" +
                   str(current_orbit_id * sat_num + current_sat_id + 1) + " up")
+        # (4) Traffic control settings
         os.system("docker exec -d " +
                   str(container_id_list[down_orbit_id * sat_num +
                                         down_sat_id]) + " tc qdisc add dev B" +
@@ -131,8 +220,11 @@ def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
           ") to (" + str(down_sat_id) + "," + str(down_orbit_id) + ")")
     isl_idx = isl_idx + 1
 
-    # Establish inter-orbit ISLs
+    # ============================================
+    # Establish inter-orbit ISLs [called: La_]
     # (Right):
+    # ============================================
+    # the same as above (Intra-orbit ISLs, Le_)
     [right_sat_id,
      right_orbit_id] = sn_get_right_satellite(current_sat_id, current_orbit_id,
                                               orbit_num)
@@ -240,8 +332,10 @@ def sn_ISL_establish(current_sat_id, current_orbit_id, container_id_list,
 def sn_establish_ISLs(container_id_list, matrix, orbit_num, sat_num,
                       constellation_size, bw, loss):
     ISL_threads = []
+    # obj: each sat in each orbit
     for current_orbit_id in range(0, orbit_num):
         for current_sat_id in range(0, sat_num):
+            # create ISLs for each obj
             ISL_thread = threading.Thread(
                 target=sn_ISL_establish,
                 args=(current_sat_id, current_orbit_id, container_id_list,
@@ -279,18 +373,29 @@ def sn_get_container_info():
 
 def sn_establish_GSL(container_id_list, matrix, GS_num, constellation_size, bw,
                      loss):
+    """
+    sn_establish_GSL 的 Docstring
+    
+    IP: 9.x.x.0/24
+        Satellite: .50
+        GS: .60
+    """
+    
     # starting links among satellites and ground stations
     for i in range(1, constellation_size + 1):
         for j in range(constellation_size + 1,
                        constellation_size + GS_num + 1):
+            # Visibility comes first!
             # matrix[i-1][j-1])==1 means a link between node i and node j
             if ((float(matrix[i - 1][j - 1])) <= 0.01):
                 continue
+            
             # IP address  (there is a link between i and j)
             delay = str(matrix[i - 1][j - 1])
             address_16_23 = (j - constellation_size) & 0xff
             address_8_15 = i & 0xff
             GSL_name = "GSL_" + str(i) + "-" + str(j)
+            
             # Create internal network in docker.
             os.system('docker network create ' + GSL_name + " --subnet 9." +
                       str(address_16_23) + "." + str(address_8_15) + ".0/24")
@@ -381,10 +486,12 @@ def sn_establish_GSL(container_id_list, matrix, GS_num, constellation_size, bw,
 
 
 def sn_copy_run_conf(container_idx, Path, current, total):
+    # copy bird.conf to each container
     os.system("docker cp " + Path + "/B" + str(current + 1) + ".conf " +
               str(container_idx) + ":/B" + str(current + 1) + ".conf")
     print("[" + str(current + 1) + "/" + str(total) + "]" +
           " docker cp bird.conf " + str(container_idx) + ":/bird.conf")
+    # execute bird routing process in each container
     os.system("docker exec -it " + str(container_idx) + " bird -c B" +
               str(current + 1) + ".conf")
     print("[" + str(current + 1) + "/" + str(total) +
@@ -397,9 +504,12 @@ def sn_copy_run_conf_to_each_container(container_id_list, sat_node_number,
     print(
         "Copy bird configuration file to each container and run routing process."
     )
+    
+    # Copy bird configuration file to each container and run routing process.
     total = len(container_id_list)
     copy_threads = []
     for current in range(0, total):
+        # thread-level copy
         copy_thread = threading.Thread(
             target=sn_copy_run_conf,
             args=(container_id_list[current], path + "/conf/bird-" +
@@ -410,15 +520,19 @@ def sn_copy_run_conf_to_each_container(container_id_list, sat_node_number,
         copy_thread.start()
     for copy_thread in copy_threads:
         copy_thread.join()
+    
+    # Routing convergence.
     print("Initializing routing...")
     sleep(120)
     print("Routing initialized!")
 
 
 def sn_damage_link(sat_index, container_id_list):
+    # fetch all interfaces except eth0 and lo
     with os.popen(
             "docker exec -it " + str(container_id_list[sat_index]) +
             " ifconfig | sed 's/[ \t].*//;/^\(eth0\|\)\(lo\|\)$/d'") as f:
+        # 100% packet loss to simulate damage
         ifconfig_output = f.readlines()
         for intreface in range(0, len(ifconfig_output), 2):
             os.system("docker exec -d " + str(container_id_list[sat_index]) +
@@ -452,6 +566,7 @@ def sn_recover_link(
             "docker exec -it " + str(container_id_list[damaged_satellite]) +
             " ifconfig | sed 's/[ \t].*//;/^\(eth0\|\)\(lo\|\)$/d'") as f:
         ifconfig_output = f.readlines()
+        # recover by setting packet loss to sat_loss%
         for i in range(0, len(ifconfig_output), 2):
             os.system("docker exec -d " +
                       str(container_id_list[damaged_satellite]) +
@@ -468,14 +583,18 @@ def sn_del_network(network_name):
 
 
 def sn_stop_emulation():
+    # close: docker swarm service
     os.system("docker service rm constellation-test")
+    # close: all containers
     with os.popen("docker rm -f $(docker ps -a -q)") as f:
         f.readlines()
+    # close: all networks
     with os.popen("docker network ls") as f:
         all_br_info = f.readlines()
         del_threads = []
         for line in all_br_info:
-            if "La" in line or "Le" or "GS" in line:
+            # FIXME(bxhu): fixed a bug here, only delete La_, Le_, GS_ networks
+            if ("La" in line) or ("Le" in line) or ("GS" in line):
                 network_name = line.split()[1]
                 del_thread = threading.Thread(target=sn_del_network,
                                               args=(network_name, ))
@@ -502,8 +621,12 @@ def sn_recover(damage_list, container_id_list, sat_loss):
 def sn_update_delay(matrix, container_id_list,
                     constellation_size):  # updating delays
     delay_threads = []
+    
+    # Only update the upper triangle matrix
+    # in case of duplicate updating.
     for row in range(len(matrix)):
         for col in range(row, len(matrix[row])):
+            # if link exists
             if float(matrix[row][col]) > 0:
                 if row < col:
                     delay_thread = threading.Thread(
@@ -526,14 +649,18 @@ def sn_update_delay(matrix, container_id_list,
 
 def sn_delay_change(link_x, link_y, delay, container_id_list,
                     constellation_size):  # multi-thread updating delays
-    if link_y <= constellation_size:
+    """
+    Update delay for a specific link
+    """
+    
+    if link_y <= constellation_size: # ISL
         os.system("docker exec -d " + str(container_id_list[link_x]) +
                   " tc qdisc change dev B" + str(link_x + 1) + "-eth" +
                   str(link_y + 1) + " root netem delay " + str(delay) + "ms")
         os.system("docker exec -d " + str(container_id_list[link_y]) +
                   " tc qdisc change dev B" + str(link_y + 1) + "-eth" +
                   str(link_x + 1) + " root netem delay " + str(delay) + "ms")
-    else:
+    else: # GSL
         os.system("docker exec -d " + str(container_id_list[link_x]) +
                   " tc qdisc change dev B" + str(link_x + 1) + "-eth" +
                   str(link_y + 1) + " root netem delay " + str(delay) + "ms")
@@ -555,8 +682,10 @@ if __name__ == '__main__':
         current_topo_path = sys.argv[9]
         matrix = sn_get_param(current_topo_path)
         container_id_list = sn_get_container_info()
+        # Establish ISLs
         sn_establish_ISLs(container_id_list, matrix, orbit_num, sat_num,
                           constellation_size, sat_bandwidth, sat_loss)
+        # Establish GSLs
         sn_establish_GSL(container_id_list, matrix, GS_num, constellation_size,
                          sat_ground_bandwidth, sat_ground_loss)
     elif len(sys.argv) == 4:
