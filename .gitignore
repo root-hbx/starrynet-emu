@@ -54,3 +54,6 @@ dkms.conf
 .DS_Store
 .idea
 __pycache__
+
+# Private config files
+config.json
