@@ -37,6 +37,10 @@ class Observer():
     def access_P_L_shortest(self, sat_cbf, fac_cbf, fac_num, sat_num,
                             num_orbits, num_sats_per_orbit, duration, fac_ll,
                             sat_lla, bound_dis, alpha, antenna_num, path):
+        """
+        Calculate the delay matrix between satellites and ground stations
+        """
+        
         delay_matrix = np.zeros((fac_num + sat_num, fac_num + sat_num))
         for cur_time in range(duration):
             for i in range(0, fac_num):
@@ -77,17 +81,20 @@ class Observer():
                                               299792.458) * 1000  # ms
                         delay_matrix[sat_num + i][key] = delay_time
                         delay_matrix[key][sat_num + i] = delay_time
+            # +Grid topology
             for i in range(num_orbits):
                 for j in range(num_sats_per_orbit):
                     num_sat1 = i * num_sats_per_orbit + j
                     x1 = sat_cbf[cur_time][num_sat1][0]  # km
                     y1 = sat_cbf[cur_time][num_sat1][1]
                     z1 = sat_cbf[cur_time][num_sat1][2]
+                    # intra-orbit connection
                     num_sat2 = i * num_sats_per_orbit + (
                         j + 1) % num_sats_per_orbit
                     x2 = sat_cbf[cur_time][num_sat2][0]  # km
                     y2 = sat_cbf[cur_time][num_sat2][1]
                     z2 = sat_cbf[cur_time][num_sat2][2]
+                    # inter-orbit connection
                     num_sat3 = ((i + 1) % num_orbits) * num_sats_per_orbit + j
                     x3 = sat_cbf[cur_time][num_sat3][0]  # km
                     y3 = sat_cbf[cur_time][num_sat3][1]
@@ -134,6 +141,9 @@ class Observer():
         return cbf  # xyz coordinates of all the satellites
 
     def calculate_bound(self, inclination_angle, height):
+        """
+        Calculate GS's maximum communication distance with satellite
+        """
         bound_distance = 6371 * math.cos(
             (90 + inclination_angle) / 180 * math.pi) + math.sqrt(
                 math.pow(
