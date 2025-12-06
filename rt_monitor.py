@@ -37,7 +37,7 @@ class RTMonitor:
 
         # Initialize log file
         with open(self.log_file, 'w') as f:
-            f.write(f"StarryNet Real-time Monitor Log\n")
+            f.write("StarryNet Real-time Monitor Log\n")
             f.write(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 80 + "\n\n")
 
@@ -111,8 +111,8 @@ class RTMonitor:
         if node1_type == "sat" and node2_type == "sat":
             link_type = "ISL"
         elif (node1_type == "sat" and node2_type == "gs") or (node1_type == "gs" and node2_type == "sat"):
-            link_type = "GSL"
-        else:  # gs-to-gs
+            link_type = "ISL + GSL"
+        else:
             link_type = "GS-GS"
 
         if rtt is not None:

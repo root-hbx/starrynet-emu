@@ -28,10 +28,10 @@ if __name__ == "__main__":
     sn.run_routing_deamon()
 
     # Start real-time monitoring after routing daemon is running
-    monitoring_pairs = [
-        (1, 2, "sat", "sat"),      # sat-1 to sat-2
-        (1, 26, "sat", "gs"),      # sat-1 to gs-26
-        (26, 27, "gs", "gs"),      # gs-26 to gs-27
+    monitoring_pairs = [ # demo: gs -> constellation -> gs
+        (26, 1, "gs", "sat"),
+        (1, 25, "sat", "sat"),
+        (25, 27, "sat", "gs")
     ]
 
     # NOTE: Start monitoring with 5-second interval
