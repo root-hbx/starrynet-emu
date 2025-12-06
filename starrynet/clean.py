@@ -18,7 +18,7 @@ def cleanup():
     with os.popen("docker network ls") as f:
         all_br_info = f.readlines()
         for line in all_br_info:
-            if "La" in line or "Le" or "GS" in line:
+            if ("La" in line) or ("Le" in line) or ("GS" in line):
                 network_name = line.split()[1]
                 print('docker network rm ' + network_name)
                 os.system('docker network rm ' + network_name)
