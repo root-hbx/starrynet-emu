@@ -255,11 +255,15 @@ def sn_delete_remote_network_bridge(remote_ssh):
 def sn_reset_docker_env(remote_ssh, docker_service_name, node_size):
     print("Reset docker environment for constellation emulation ...")
     print("Remove legacy containers.")
+    # rm service
     print(sn_remote_cmd(remote_ssh,
                         "docker service rm " + docker_service_name))
+    # rm containers
     print(sn_remote_cmd(remote_ssh, "docker rm -f $(docker ps -a -q)"))
     print("Remove legacy emulated ISLs.")
+    # rm network bridges
     sn_delete_remote_network_bridge(remote_ssh)
+    # docker swarm service: create new containers
     print("Creating new containers...")
     sn_remote_cmd(
         remote_ssh, "docker service create --replicas " + str(node_size) +
@@ -269,6 +273,9 @@ def sn_reset_docker_env(remote_ssh, docker_service_name, node_size):
 
 def sn_rename_all_container(remote_ssh, container_id_list, new_idx):
     print("Rename all containers ...")
+    # Rename all containers with the global idx:
+    # container prev name: `abcdef`
+    # container new name: `ovs_container_1`
     new_idx = 1
     for container_id in container_id_list:
         sn_remote_cmd(
@@ -300,12 +307,15 @@ class sn_Link_Init_Thread(threading.Thread):
 
     def run(self):
         print('Run in link init thread.')
+        # Upload orchestrater file and initial delay file
         self.remote_ftp.put(
             os.path.join(os.getcwd(), "starrynet/sn_orchestrater.py"),
             self.file_path + "/sn_orchestrater.py")
+        # Upload initial delay file (DelayMetrix at time 1)
         self.remote_ftp.put(
             self.configuration_file_path + "/" + self.file_path +
             '/delay/1.txt', self.file_path + "/1.txt")
+        # Initialize links (call: orchestrater.py)
         print('Initializing links ...')
         sn_remote_cmd(
             self.remote_ssh, "python3 " + self.file_path +
@@ -339,9 +349,11 @@ class sn_Routing_Init_Thread(threading.Thread):
         print(
             "Copy bird configuration file to each container and run routing process."
         )
+        # Upload orchestrater file
         self.remote_ftp.put(
             os.path.join(os.getcwd(), "starrynet/sn_orchestrater.py"),
             self.file_path + "/sn_orchestrater.py")
+        # Config BIRD routing in each container (call: orchestrater.py) 
         print('Initializing routing ...')
         sn_remote_cmd(
             self.remote_ssh, "python3 " + self.file_path +
@@ -407,28 +419,33 @@ class sn_Emulation_Start_Thread(threading.Thread):
                 current_time = str(int(words[1][:-1]))
                 while int(current_time) > timeptr:
                     start_time = time.time()
+                    # (1) Checking utility
                     if timeptr in self.utility_checking_time:
                         sn_check_utility(
                             timeptr, self.remote_ssh,
                             self.configuration_file_path + "/" +
                             self.file_path)
+                    # (2) Updating link delays periodically
                     if timeptr % self.update_interval == 0:
                         # updating link delays after link changes
                         sn_update_delay(self.file_path,
                                         self.configuration_file_path, timeptr,
                                         self.constellation_size,
                                         self.remote_ssh, self.remote_ftp)
+                    # (3) Damage links simulation
                     if timeptr in self.damage_time:
                         sn_damage(
                             self.damage_ratio[self.damage_time.index(timeptr)],
                             self.damage_list, self.constellation_size,
                             self.remote_ssh, self.remote_ftp, self.file_path,
                             self.configuration_file_path)
+                    # (4) Recover links simulation
                     if timeptr in self.recovery_time:
                         sn_recover(self.damage_list, self.sat_loss,
                                    self.remote_ssh, self.remote_ftp,
                                    self.file_path,
                                    self.configuration_file_path)
+                    # (5) SR src-route simulation: from src to des via target
                     if timeptr in self.sr_time:
                         index = [
                             i for i, val in enumerate(self.sr_time)
@@ -439,6 +456,7 @@ class sn_Emulation_Start_Thread(threading.Thread):
                                   self.sr_des[index_num],
                                   self.sr_target[index_num],
                                   self.container_id_list, self.remote_ssh)
+                    # (6) Ping simulation
                     if timeptr in self.ping_time:
                         if timeptr in self.ping_time:
                             index = [
@@ -458,6 +476,7 @@ class sn_Emulation_Start_Thread(threading.Thread):
                                           self.remote_ssh))
                                 ping_thread.start()
                                 ping_threads.append(ping_thread)
+                    # (7) iPerf simulation
                     if timeptr in self.perf_time:
                         if timeptr in self.perf_time:
                             index = [
@@ -635,11 +654,13 @@ def sn_check_utility(time_index, remote_ssh, file_path):
 def sn_update_delay(file_path, configuration_file_path, timeptr,
                     constellation_size, remote_ssh,
                     remote_ftp):  # updating delays
+    # Upload orchestrater file and new delay file
     remote_ftp.put(os.path.join(os.getcwd(), "starrynet/sn_orchestrater.py"),
                    file_path + "/sn_orchestrater.py")
     remote_ftp.put(
         configuration_file_path + "/" + file_path + '/delay/' + str(timeptr) +
         '.txt', file_path + '/' + str(timeptr) + '.txt')
+    # Update delays (call: orchestrater.py)
     sn_remote_cmd(
         remote_ssh,
         "python3 " + file_path + "/sn_orchestrater.py " + file_path + '/' +
@@ -689,17 +710,29 @@ def sn_recover(damage_list, sat_loss, remote_ssh, remote_ftp, file_path,
 
 
 def sn_sr(src, des, target, container_id_list, remote_ssh):
+    """
+    Source Routing from src to des via target
+    
+    NOTE: Can be used for path tracing.
+    """
+    
     ifconfig_output = sn_remote_cmd(
         remote_ssh, "docker exec -it " + str(container_id_list[des - 1]) +
         " ifconfig | sed 's/[ \t].*//;/^\(eth0\|\)\(lo\|\)$/d'")
+    
+    # dst node IP
     des_IP = sn_remote_cmd(
         remote_ssh,
         "docker exec -it " + str(container_id_list[des - 1]) + " ifconfig " +
         ifconfig_output[0][:-1] + "|awk -F '[ :]+' 'NR==2{print $4}'")
+    
+    # relay node IP
     target_IP = sn_remote_cmd(
         remote_ssh, "docker exec -it " + str(container_id_list[target - 1]) +
         " ifconfig B" + str(target) + "-eth" + str(src) +
         "|awk -F '[ :]+' 'NR==2{print $4}'")
+    
+    # rm old route [gen by BIRD] and add new route [manually]
     sn_remote_cmd(
         remote_ssh, "docker exec -d " + str(container_id_list[src - 1]) +
         " ip route del " + str(des_IP[0][:-3]) + "0/24")
@@ -714,7 +747,13 @@ def sn_sr(src, des, target, container_id_list, remote_ssh):
 
 def sn_ping(src, des, time_index, constellation_size, container_id_list,
             file_path, configuration_file_path, remote_ssh):
-    if des <= constellation_size:
+    """ Ping from src to des and save the result in file_path/ping-src-des_timeindex.txt
+    
+    NOTE: Can be used for Real-time monitoring of connectivity between two nodes.
+    """
+    
+    # (1) Fetch targetIP
+    if des <= constellation_size: # sat node
         ifconfig_output = sn_remote_cmd(
             remote_ssh, "docker exec -it " + str(container_id_list[des - 1]) +
             " ifconfig | sed 's/[ \t].*//;/^\(eth0\|\)\(lo\|\)$/d'")
@@ -722,11 +761,12 @@ def sn_ping(src, des, time_index, constellation_size, container_id_list,
             remote_ssh, "docker exec -it " + str(container_id_list[des - 1]) +
             " ifconfig " + ifconfig_output[0][:-1] +
             "|awk -F '[ :]+' 'NR==2{print $4}'")
-    else:
+    else: # GS node
         des_IP = sn_remote_cmd(
             remote_ssh, "docker exec -it " + str(container_id_list[des - 1]) +
             " ifconfig B" + str(des) +
             "-default |awk -F '[ :]+' 'NR==2{print $4}'")
+    # (2) Ping from src to des
     ping_result = sn_remote_cmd(
         remote_ssh, "docker exec -i " + str(container_id_list[src - 1]) +
         " ping " + str(des_IP[0][:-1]) + " -c 4 -i 0.01 ")
@@ -869,6 +909,15 @@ def sn_establish_new_GSL(container_id_list, matrix, constellation_size, bw,
 
 
 def sn_del_link(first_index, second_index, container_id_list, remote_ssh):
+    """
+    Delete a specified link between two nodes.
+    
+    1. Bring down the interfaces on both containers.
+    2. Disconnect both containers from the Docker network bridge.
+    3. Remove the Docker network bridge.
+    """
+    
+    # rm network interfaces
     sn_remote_cmd(
         remote_ssh, "docker exec -d " +
         str(container_id_list[second_index - 1]) + " ip link set dev B" +
@@ -877,6 +926,8 @@ def sn_del_link(first_index, second_index, container_id_list, remote_ssh):
         remote_ssh, "docker exec -d " +
         str(container_id_list[first_index - 1]) + " ip link set dev B" +
         str(first_index) + "-eth" + str(second_index) + " down")
+    
+    # rm network connection
     GSL_name = "GSL_" + str(first_index) + "-" + str(second_index)
     sn_remote_cmd(
         remote_ssh, 'docker network disconnect ' + GSL_name + " " +
@@ -884,6 +935,8 @@ def sn_del_link(first_index, second_index, container_id_list, remote_ssh):
     sn_remote_cmd(
         remote_ssh, 'docker network disconnect ' + GSL_name + " " +
         str(container_id_list[second_index - 1]))
+    
+    # rm network bridge
     sn_remote_cmd(remote_ssh, 'docker network rm ' + GSL_name)
 
 

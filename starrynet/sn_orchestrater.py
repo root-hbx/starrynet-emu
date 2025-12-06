@@ -31,7 +31,7 @@ Network Name:
     Le_{current_sat_id}-{current_orbit_id}_{down_sat_id}-{down_orbit_id}   (intra-orbit ISL)
     GSL_{sat_id}-{GS_id}                                                 (GSL)
 
-sNetwork Interface: 
+Network Interface: 
     B{global_id}-eth{peer_global_id}
 
 Config Files:
