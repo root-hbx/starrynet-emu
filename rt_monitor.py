@@ -113,7 +113,7 @@ class RTMonitor:
         if node1_type == "sat" and node2_type == "sat":
             link_type = "ISL"
         elif (node1_type == "sat" and node2_type == "gs") or (node1_type == "gs" and node2_type == "sat"):
-            link_type = "ISL + GSL"
+            link_type = "ISL + GSL or GSL"
         else:
             link_type = "GS-GS"
 
