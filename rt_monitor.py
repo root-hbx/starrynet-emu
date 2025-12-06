@@ -61,7 +61,9 @@ class RTMonitor:
             target_ip = ip_list[0]
 
             # Ping: node1 to node2
-            cmd = f"docker exec ovs_container_{node1_index} ping -c 1 -W 1 {target_ip}"
+            container_id = self.sn.container_id_list[node1_index - 1]
+            cmd = f"docker exec {container_id} ping -c 1 -W 1 {target_ip}"
+            
             result = self.sn.remote_ssh.exec_command(cmd, get_pty=True)
             stdin, stdout, stderr = result
             output = stdout.read().decode('utf-8')
