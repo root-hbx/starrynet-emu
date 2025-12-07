@@ -114,7 +114,7 @@ class RTLogger:
         if src_sat is not None and dst_sat is not None:
             path_line = f"Path: GS-{src_gs} --- SAT-{src_sat} --- ISL --- SAT-{dst_sat} --- GS-{dst_gs}\n"
         else:
-            path_line = f"Path: GS-{src_gs} --- (disconnected) --- GS-{dst_gs}\n"
+            path_line = f"Path: GS-{src_gs} --- DISCONNECT --- GS-{dst_gs}\n"
 
         with open(log_file, 'a') as f:
             f.write(path_line)
@@ -216,32 +216,141 @@ class RTMonitor:
 
         return int(duration) + 2
 
-    def get_gs_access_sat(self, gs_index, time_index):
+    def traceroute_path(self, src_index, dst_index):
         """
-        Get the access satellite connected to a ground station at a given time
+        Use traceroute to get the actual routing path between two nodes
 
         Args:
-            gs_index: Index of the ground station
-            time_index: Emulation time index
+            src_index: Index of source node
+            dst_index: Index of destination node
 
         Returns:
-            Satellite index, or None if not connected
+            List of IP addresses in the path, or None if failed
         """
         try:
-            # Get all neighbors of the GS
-            neighbors = self.sn.get_neighbors(gs_index, time_index)
-            if not neighbors:
+            # Get IP address of destination
+            ip_list = self.sn.get_IP(dst_index)
+            if not ip_list or len(ip_list) == 0:
                 return None
+
+            target_ip = ip_list[0]
+
+            # Run traceroute from src to dst
+            container_id = self.sn.container_id_list[src_index - 1]
+            cmd = f"docker exec {container_id} traceroute -n -m 10 -w 3 {target_ip}"
+
+            result = self.sn.remote_ssh.exec_command(cmd, get_pty=True)
+            stdin, stdout, stderr = result
+            output = stdout.read().decode('utf-8')
+
+            # Parse traceroute output to extract IP addresses
+            path_ips = []
+            for line in output.split('\n'):
+                # Look for lines with hop numbers and IP addresses
+                # Format: " 1  10.1.2.30  0.123 ms"
+                match = re.search(r'\s+\d+\s+(\d+\.\d+\.\d+\.\d+)', line)
+                if match:
+                    path_ips.append(match.group(1))
+
+            return path_ips if path_ips else None
+
+        except Exception:
+            return None
+
+    def ip_to_node_index(self, ip_address):
+        """
+        Convert IP address to node index by parsing the IP directly
+
+        IP allocation rules in StarryNet:
+        - GSL: 9.x.y.z where z=50 (satellite) or z=60 (GS)
+          - For 9.x.y.50: satellite node = y
+          - For 9.x.y.60: GS node = x + constellation_size
+        - ISL: 10.x.y.z (satellite-to-satellite links)
+          - Need to parse based on ISL structure
+
+        Args:
+            ip_address: IP address string
+
+        Returns:
+            Node index, or None if not found
+        """
+        try:
+            parts = ip_address.split('.')
+            if len(parts) != 4:
+                return None
+
+            first_octet = int(parts[0])
+            second_octet = int(parts[1])
+            third_octet = int(parts[2])
+            fourth_octet = int(parts[3])
 
             constellation_size = self.sn.constellation_size
 
-            for neighbor in neighbors:
-                if neighbor <= constellation_size:
-                    return neighbor  # This is a satellite
+            # GSL IP: 9.x.y.z
+            if first_octet == 9:
+                if fourth_octet == 50:
+                    # Satellite side of GSL: node = y (third octet)
+                    return third_octet
+                elif fourth_octet == 60:
+                    # GS side of GSL: GS node = x + constellation_size
+                    return second_octet + constellation_size
+
+            # ISL IP: 10.x.y.z
+            # For ISL, we need to extract satellite ID from the structure
+            # Based on ISL addressing: isl_idx is encoded in octets 2 and 3
+            elif first_octet == 10:
+                # ISL index is encoded in second and third octets
+                isl_idx = (second_octet << 8) | third_octet
+                # Each satellite has 2 ISLs (intra and inter-orbit)
+                satellite_id = (isl_idx - 1) // 2 + 1
+                if satellite_id <= constellation_size:
+                    return satellite_id
 
             return None
+
         except Exception:
             return None
+
+    def get_gs_access_sat_from_route(self, src_gs, dst_gs):
+        """
+        Get the actual access satellites used in routing from src_gs to dst_gs
+
+        Args:
+            src_gs: Source ground station index
+            dst_gs: Destination ground station index
+
+        Returns:
+            Tuple of (src_access_sat, dst_access_sat), or (None, None) if failed
+        """
+        try:
+            # Get the actual routing path using traceroute
+            path_ips = self.traceroute_path(src_gs, dst_gs)
+
+            if not path_ips or len(path_ips) < 2:
+                return None, None
+
+            constellation_size = self.sn.constellation_size
+
+            # First hop from src_gs should be the source access satellite
+            src_sat = None
+            for ip in path_ips[:3]:  # Check first few hops
+                node_idx = self.ip_to_node_index(ip)
+                if node_idx and node_idx <= constellation_size:
+                    src_sat = node_idx
+                    break
+
+            # Last hop before dst_gs should be the destination access satellite
+            dst_sat = None
+            for ip in reversed(path_ips[-3:]):  # Check last few hops
+                node_idx = self.ip_to_node_index(ip)
+                if node_idx and node_idx <= constellation_size:
+                    dst_sat = node_idx
+                    break
+
+            return src_sat, dst_sat
+
+        except Exception:
+            return None, None
 
     def log_rtt(self, node1_index, node2_index, rtt, node1_type="sat", node2_type="sat"):
         """
@@ -257,10 +366,9 @@ class RTMonitor:
         emu_time = self.get_emulation_time()
         RTLogger.log_rtt(self.log_file, node1_index, node2_index, rtt, emu_time, node1_type, node2_type)
 
-        # If GS-to-GS, also log the path information
+        # If GS-to-GS, also log the path information using actual routing path
         if node1_type == "gs" and node2_type == "gs":
-            src_sat = self.get_gs_access_sat(node1_index, emu_time)
-            dst_sat = self.get_gs_access_sat(node2_index, emu_time)
+            src_sat, dst_sat = self.get_gs_access_sat_from_route(node1_index, node2_index)
             RTLogger.log_gs_path(self.log_file, node1_index, node2_index, src_sat, dst_sat)
 
     def monitor_loop(self, interval=5, node_pairs=None):
