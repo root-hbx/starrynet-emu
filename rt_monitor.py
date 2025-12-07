@@ -182,32 +182,28 @@ class Logger:
 class RTMonitor:
     """Real-time monitor for StarryNet emulation"""
 
-    def __init__(self, starrynet_instance, log_file=None):
+    def __init__(self, starrynet_instance, log_prefix=None):
         """
         Initialize the real-time monitor
 
         Args:
             starrynet_instance: StarryNet instance to monitor
-            log_file: Path to log file (default: ./rt_log_<timestamp>.txt)
+            log_prefix: Prefix for log files (default: ./rt_log_<timestamp>)
+                       Each metric will create a separate file: {prefix}_rtt.txt, {prefix}_bw.txt, etc.
         """
         self.sn = starrynet_instance
         self.running = False
         self.monitor_thread = None
         self.emulation_time = 0  # Track emulation time in seconds
         self.start_wall_time = None  # Wall clock time when emulation starts
-
-        # Generate log file name with timestamp if not provided
-        if log_file is None:
+        self.log_files = {} # Logging file path for each metric
+        
+        # Generate log file prefix with timestamp if not provided
+        if log_prefix is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.log_file = f"./rt_log_{timestamp}.txt"
+            self.log_prefix = f"./rt_log_{timestamp}"
         else:
-            self.log_file = log_file
-
-        # Initialize log file
-        with open(self.log_file, 'w') as f:
-            f.write("StarryNet Real-time Monitor Log\n")
-            f.write(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("=" * 80 + "\n\n")
+            self.log_prefix = log_prefix
 
     def measure_rtt(self, src_index, des_index):
         """
@@ -370,12 +366,15 @@ class RTMonitor:
         if measure_types is None:
             measure_types = ['rtt']
 
-        with open(self.log_file, 'a') as f:
-            f.write(f"\nMonitoring started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Monitoring interval: {interval} seconds\n")
-            f.write(f"Monitoring {len(node_pairs)} node pairs\n")
-            f.write(f"Measurement types: {', '.join(measure_types)}\n")
-            f.write("-" * 80 + "\n\n")
+        # Write monitoring info to each metric's log file
+        for metric in measure_types:
+            metric_name = 'bw' if metric == 'bandwidth' else metric
+            if metric_name in self.log_files:
+                with open(self.log_files[metric_name], 'a') as f:
+                    f.write(f"\nMonitoring started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Monitoring interval: {interval} seconds\n")
+                    f.write(f"Monitoring {len(node_pairs)} node pairs\n")
+                    f.write("-" * 80 + "\n\n")
 
         while self.running:
             for src_idx, des_idx, src_type, des_type in node_pairs:
@@ -387,14 +386,14 @@ class RTMonitor:
                     rtt_stats = self.measure_rtt(src_idx, des_idx)
                     wall_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
                     emu_time = self.get_emulation_time()
-                    Logger.log_rtt(self.log_file, emu_time, wall_time, src_idx, des_idx, rtt_stats, src_type, des_type)
+                    Logger.log_rtt(self.log_files['rtt'], emu_time, wall_time, src_idx, des_idx, rtt_stats, src_type, des_type)
 
                 # Bandwidth Measurement
                 if 'bw' in measure_types or 'bandwidth' in measure_types:
                     bw_stats = self.measure_bw(src_idx, des_idx)
                     wall_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
                     emu_time = self.get_emulation_time()
-                    Logger.log_bw(self.log_file, emu_time, wall_time, src_idx, des_idx, bw_stats, src_type, des_type)
+                    Logger.log_bw(self.log_files['bw'], emu_time, wall_time, src_idx, des_idx, bw_stats, src_type, des_type)
 
             # Sleep for the specified interval
             time.sleep(interval)
@@ -412,16 +411,33 @@ class RTMonitor:
             print("Monitor is already running!")
             return
 
+        # Default measure types
+        if measure_types is None:
+            measure_types = ['rtt']
+
+        # Initialize log files for each metric
+        for metric in measure_types:
+            # Normalize metric name (handle 'bandwidth' -> 'bw')
+            metric_name = 'bw' if metric == 'bandwidth' else metric
+            log_file = f"{self.log_prefix}_{metric_name}.txt"
+            self.log_files[metric_name] = log_file
+
+            # Create and initialize the log file
+            with open(log_file, 'w') as f:
+                f.write(f"StarryNet Real-time Monitor - {metric_name.upper()} Log\n")
+                f.write(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("=" * 80 + "\n\n")
+
         # Record start time for emulation time calculation
         self.start_wall_time = time.time()
         self.running = True
-        
+
         self.monitor_thread = threading.Thread(
             target=self.monitor_loop,
             args=(interval, node_pairs, measure_types),
             daemon=True
         )
-        
+
         self.monitor_thread.start()
 
     def stop(self):
@@ -434,37 +450,24 @@ class RTMonitor:
         if self.monitor_thread:
             self.monitor_thread.join(timeout=10)
 
-        with open(self.log_file, 'a') as f:
-            f.write(f"\n\nMonitoring stopped at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("=" * 80 + "\n")
+        # Write stop message to all log files
+        for metric_name, log_file in self.log_files.items():
+            with open(log_file, 'a') as f:
+                f.write(f"\n\nMonitoring stopped at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("=" * 80 + "\n")
 
-        print(f"Real-time monitor stopped. Log saved to {self.log_file}")
+        # Print summary of all log files
+        if self.log_files:
+            print("Real-time monitor stopped. Logs saved to:")
+            for metric_name, log_file in self.log_files.items():
+                print(f"  - {metric_name.upper()}: {log_file}")
+        else:
+            print("Real-time monitor stopped.")
 
 
-def rt_monitor(starrynet_instance, interval=5, node_pairs=None, 
-               measure_types=None, log_file=None):
-    """
-    Convenience function to create and start a real-time monitor
-
-    Args:
-        starrynet_instance: The StarryNet instance to monitor
-        interval: Monitoring interval in seconds (default: 5)
-        node_pairs: List of (src_index, des_index, src_type, des_type) tuples to monitor
-                   Default: [(1, 2, "sat", "sat"), (1, constellation_size+1, "sat", "gs")]
-        measure_types: List of measurement types: 'rtt', 'bw', or both (default: ['rtt'])
-                      Example: ['rtt', 'bw'] to measure both RTT and bandwidth
-        log_file: Path to log file (default: auto-generated with timestamp)
-
-    Returns:
-        RTMonitor instance (already started)
-
-    Example:
-        # Monitor RTT only (default)
-        monitor = rt_monitor(sn, interval=5)
-
-        # Monitor both RTT and bandwidth
-        monitor = rt_monitor(sn, interval=10, measure_types=['rtt', 'bw'])
-    """
-    monitor = RTMonitor(starrynet_instance, log_file)
+def rt_monitor(starrynet_instance, interval=5, node_pairs=None,
+               measure_types=None, log_prefix=None
+):
+    monitor = RTMonitor(starrynet_instance, log_prefix)
     monitor.start(interval, node_pairs, measure_types)
     return monitor
