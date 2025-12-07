@@ -99,6 +99,26 @@ class RTLogger:
             f.write(f"\n\nMonitoring stopped at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 80 + "\n")
 
+    @staticmethod
+    def log_gs_path(log_file, src_gs, dst_gs, src_sat, dst_sat):
+        """
+        Log GS-to-GS path information
+
+        Args:
+            log_file: Path to log file
+            src_gs: Source GS index
+            dst_gs: Destination GS index
+            src_sat: Source access satellite index
+            dst_sat: Destination access satellite index
+        """
+        if src_sat is not None and dst_sat is not None:
+            path_line = f"Path: GS-{src_gs} --- SAT-{src_sat} --- ISL --- SAT-{dst_sat} --- GS-{dst_gs}\n"
+        else:
+            path_line = f"Path: GS-{src_gs} --- (disconnected) --- GS-{dst_gs}\n"
+
+        with open(log_file, 'a') as f:
+            f.write(path_line)
+
 
 class RTParser:
     """Parser for real-time monitoring - handles parsing of network command outputs"""
@@ -191,10 +211,37 @@ class RTMonitor:
         """
         if self.start_wall_time is None:
             return 0
-        
+
         duration = time.time() - self.start_wall_time
-        
+
         return int(duration) + 2
+
+    def get_gs_access_sat(self, gs_index, time_index):
+        """
+        Get the access satellite connected to a ground station at a given time
+
+        Args:
+            gs_index: Index of the ground station
+            time_index: Emulation time index
+
+        Returns:
+            Satellite index, or None if not connected
+        """
+        try:
+            # Get all neighbors of the GS
+            neighbors = self.sn.get_neighbors(gs_index, time_index)
+            if not neighbors:
+                return None
+
+            constellation_size = self.sn.constellation_size
+
+            for neighbor in neighbors:
+                if neighbor <= constellation_size:
+                    return neighbor  # This is a satellite
+
+            return None
+        except Exception:
+            return None
 
     def log_rtt(self, node1_index, node2_index, rtt, node1_type="sat", node2_type="sat"):
         """
@@ -209,6 +256,12 @@ class RTMonitor:
         """
         emu_time = self.get_emulation_time()
         RTLogger.log_rtt(self.log_file, node1_index, node2_index, rtt, emu_time, node1_type, node2_type)
+
+        # If GS-to-GS, also log the path information
+        if node1_type == "gs" and node2_type == "gs":
+            src_sat = self.get_gs_access_sat(node1_index, emu_time)
+            dst_sat = self.get_gs_access_sat(node2_index, emu_time)
+            RTLogger.log_gs_path(self.log_file, node1_index, node2_index, src_sat, dst_sat)
 
     def monitor_loop(self, interval=5, node_pairs=None):
         """
