@@ -60,13 +60,13 @@ class RTLogger:
             node1_type: Type of node1 (sat/gs)
             node2_type: Type of node2 (sat/gs)
         """
-        wall_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        # wall_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         link_type = RTLogger.determine_link_type(node1_type, node2_type)
 
         if rtt is not None:
-            log_line = f"[T={emu_time:04d}s] [{wall_time}] {link_type}: RTT({node1_type}-{node1_index}, {node2_type}-{node2_index}): {rtt:.3f} ms\n"
+            log_line = f"[T={emu_time:04d}s]\n" + f"{link_type}: RTT({node1_type}-{node1_index}, {node2_type}-{node2_index}): {rtt:.3f} ms\n"
         else:
-            log_line = f"[T={emu_time:04d}s] [{wall_time}] {link_type}: RTT({node1_type}-{node1_index}, {node2_type}-{node2_index}): FAILED\n"
+            log_line = f"[T={emu_time:04d}s]\n" + f"{link_type}: RTT({node1_type}-{node1_index}, {node2_type}-{node2_index}): FAILED\n"
 
         with open(log_file, 'a') as f:
             f.write(log_line)
