@@ -3,6 +3,7 @@ import time
 import re
 import os
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import utility functions from sn_utils
 import sys
@@ -298,10 +299,38 @@ class RTMonitor:
         """
         if self.start_wall_time is None:
             return 0
-        
+
         duration = time.time() - self.start_wall_time
-        
+
         return int(duration) + 2
+
+    def _test_rtt(self, src_idx, des_idx, src_type, des_type):
+        """Helper method to test RTT for a single pair (used in concurrent execution)"""
+        print(f"[DEBUG] Measuring RTT: {src_type}-{src_idx} -> {des_type}-{des_idx}")
+        test_start = time.time()
+
+        rtt_stats = self.measure_rtt(src_idx, des_idx)
+
+        test_duration = time.time() - test_start
+        print(f"[DEBUG] RTT test took {test_duration:.2f}s, result: {'SUCCESS' if rtt_stats else 'FAILED'}")
+
+        wall_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        emu_time = self.get_emulation_time()
+        Logger.log_rtt(self.log_files['rtt'], emu_time, wall_time, src_idx, des_idx, rtt_stats, src_type, des_type)
+
+    def _test_bw(self, src_idx, des_idx, src_type, des_type):
+        """Helper method to test bandwidth for a single pair (used in concurrent execution)"""
+        print(f"[DEBUG] Measuring BW: {src_type}-{src_idx} -> {des_type}-{des_idx}")
+        test_start = time.time()
+
+        bw_stats = self.measure_bw(src_idx, des_idx)
+
+        test_duration = time.time() - test_start
+        print(f"[DEBUG] BW test took {test_duration:.2f}s, result: {'SUCCESS' if bw_stats else 'FAILED'}")
+
+        wall_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        emu_time = self.get_emulation_time()
+        Logger.log_bw(self.log_files['bw'], emu_time, wall_time, src_idx, des_idx, bw_stats, src_type, des_type)
 
     def monitor_loop(self, interval=5, node_pairs=None, measure_types=None):
         """
@@ -336,27 +365,53 @@ class RTMonitor:
                     f.write(f"Monitoring {len(node_pairs)} node pairs\n")
                     f.write("-" * 80 + "\n\n")
 
+        loop_count = 0
         while self.running:
-            for src_idx, des_idx, src_type, des_type in node_pairs:
-                if not self.running:
-                    break
+            loop_count += 1
+            loop_start = time.time()
+            print(f"[DEBUG] Starting monitoring loop #{loop_count} - CONCURRENT MODE")
 
-                # RTT Measurement
-                if 'rtt' in measure_types:
-                    rtt_stats = self.measure_rtt(src_idx, des_idx)
-                    wall_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                    emu_time = self.get_emulation_time()
-                    Logger.log_rtt(self.log_files['rtt'], emu_time, wall_time, src_idx, des_idx, rtt_stats, src_type, des_type)
+            # Use ThreadPoolExecutor to run all tests concurrently
+            max_workers = len(node_pairs) * len(measure_types)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
 
-                # Bandwidth Measurement
-                if 'bw' in measure_types or 'bandwidth' in measure_types:
-                    bw_stats = self.measure_bw(src_idx, des_idx)
-                    wall_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                    emu_time = self.get_emulation_time()
-                    Logger.log_bw(self.log_files['bw'], emu_time, wall_time, src_idx, des_idx, bw_stats, src_type, des_type)
+                # Submit all tests (rtt / bw / ...) to the executor
+                for src_idx, des_idx, src_type, des_type in node_pairs:
+                    if not self.running:
+                        break
 
-            # Sleep for the specified interval
-            time.sleep(interval)
+                    # Submit RTT test
+                    if 'rtt' in measure_types:
+                        future = executor.submit(self._test_rtt, src_idx, des_idx, src_type, des_type)
+                        futures.append(future)
+
+                    # Submit BW test
+                    if 'bw' in measure_types or 'bandwidth' in measure_types:
+                        future = executor.submit(self._test_bw, src_idx, des_idx, src_type, des_type)
+                        futures.append(future)
+
+                # Wait for all tests to complete with timeout
+                print(f"[DEBUG] Waiting for {len(futures)} concurrent tests to complete...")
+                test_timeout = 30  # Maximum 30 seconds per test
+
+                try:
+                    for future in as_completed(futures, timeout=test_timeout):
+                        try:
+                            future.result(timeout=5)
+                        except Exception as e:
+                            print(f"[ERROR] Test exception: {e}")
+                except TimeoutError:
+                    print(f"[ERROR] Some tests timed out after {test_timeout}s, cancelling remaining...")
+                    # Cancel any remaining futures
+                    for future in futures:
+                        future.cancel()
+
+            loop_duration = time.time() - loop_start
+            print(f"[DEBUG] Loop #{loop_count} completed in {loop_duration:.2f}s")
+
+            # Dynamic sleep: if test was fast, sleep to maintain interval; if slow, minimal sleep
+            time.sleep(interval - loop_duration if loop_duration < interval else 1)
 
     def start(self, interval=5, node_pairs=None, measure_types=None):
         """
