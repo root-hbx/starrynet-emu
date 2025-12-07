@@ -33,20 +33,13 @@ if __name__ == "__main__":
         (1, 25, "sat", "sat"),
         (25, 27, "sat", "gs")
     ]
-    
-    routing_nodes = [
-        (1, "sat"),
-        (5, "sat"),
-        (26, "gs")
-    ]
 
     # NOTE: Start monitoring with 5-second interval
     monitor = rt_monitor(
         sn, 
         interval=5, 
         node_pairs=monitoring_pairs,
-        measure_types=["rtt", "bw"],
-        routing_nodes=routing_nodes
+        measure_types=["rtt", "bw"]
     )
 
     node_index1 = 1
