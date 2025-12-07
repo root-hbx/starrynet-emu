@@ -130,7 +130,7 @@ class Logger:
             log_line = (
                 f"[T={emu_time:04d}s] [{wall_time}] {link_type}: "
                 f"RTT({src_type}-{src_index}, {des_type}-{des_index}): "
-                f"{rtt_stats['avg']:.3f}"
+                f"{rtt_stats['avg']:.3f} ms\n"
             )
         else:
             log_line = (
@@ -166,7 +166,7 @@ class Logger:
             log_line = (
                 f"[T={emu_time:04d}s] [{wall_time}] {link_type}: "
                 f"BW({src_type}-{src_index}, {des_type}-{des_index}): "
-                f"({bw_stats['bandwidth_mbps']:.2f} Mbps)\n"
+                f"{bw_stats['bandwidth_mbps']:.2f} Mbps\n"
             )
         else:
             log_line = (
@@ -286,46 +286,6 @@ class RTMonitor:
 
         except Exception as e:
             print(f"Error measuring bandwidth: {e}")
-            return None
-
-    def measure_routing(self, node_index):
-        """
-        Get routing table of a specific node using sn_route() from sn_utils
-
-        Args:
-            node_index: Node index (1-based)
-
-        Returns:
-            List of routing table lines, or None if failed
-        """
-        try:
-            # Get current emulation time as time_index
-            time_index = self.get_emulation_time()
-
-            # Call sn_route() to get routing table and save to file
-            sn_route(
-                src=node_index,
-                time_index=time_index,
-                file_path=self.sn.file_path,
-                configuration_file_path=self.sn.configuration_file_path,
-                container_id_list=self.sn.container_id_list,
-                remote_ssh=self.sn.remote_ssh
-            )
-
-            # Read result file
-            result_file = os.path.join(
-                self.sn.configuration_file_path,
-                self.sn.file_path,
-                f"route-{node_index}_{time_index}.txt"
-            )
-
-            with open(result_file, 'r') as f:
-                routes = f.readlines()
-
-            return routes
-
-        except Exception as e:
-            print(f"Error getting routing table: {e}")
             return None
 
     def get_emulation_time(self):
