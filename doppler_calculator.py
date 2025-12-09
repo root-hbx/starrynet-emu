@@ -2,7 +2,45 @@
 # -*- coding: UTF-8 -*-
 """
 Doppler Shift Calculator for StarryNet
-Calculates Doppler shift for GSL (Ground-Satellite Links) based on TLE data
+Calculates Doppler shift for GSL (Ground-Satellite Links) based on orbital propagation.
+
+This module implements the time-varying characteristics of satellite-ground links,
+which is crucial for realistic LEO satellite network simulation.
+
+The time-varying Doppler shift is achieved through the following data flow:
+
+Monitoring Loop(t)
+    ↓
+get_emulation_time()  ← Returns current emulation time t
+    ↓
+calculate_doppler_shift_for_gsl(gs_index, sat_index)
+    ↓
+    # Convert time t to UTC time object
+    current_time = ts.utc(2022, 1, 1, 1, 0, t)
+    ↓
+calculate_doppler_for_gsl(satellite, gs_lat, gs_lon, current_time)
+    ↓
+get_satellite_state(satellite, current_time)  ← [KEY] Time t determines satellite position
+    ↓
+    geocentric = satellite.at(current_time)  ← SGP4 orbital propagation at time t
+    ↓
+    Returns position_t, velocity_t  ← Time-varying position and velocity
+    ↓
+calculate_radial_velocity(pos_t, vel_t, gs_pos)
+    ↓
+    v_r(t) = velocity_t · los_unit_t  ← Time-varying radial velocity
+    ↓
+calculate_doppler_shift(v_r(t))
+    ↓
+    Δf(t) = -(v_r(t) / c) x f_c  ← Time-varying Doppler shift
+
+Key Points:
+-----------
+1. Time-driven: Each monitoring cycle uses the current emulation time t
+2. SGP4 propagation: Satellite position and velocity are computed at specific time t
+3. Dynamic geometry: As satellite moves along orbit, the line-of-sight vector changes
+4. Radial velocity variation: v_r(t) changes as satellite approaches/recedes from GS
+5. Resulting Doppler shift: Δf(t) varies continuously, reflecting real LEO dynamics
 """
 
 import numpy as np
@@ -155,28 +193,29 @@ class DopplerCalculator:
 
         return position_km, velocity_km_s
 
-    def get_gs_position_gcrf(self, lat_deg, lon_deg, alt_m=0.0):
+    def get_gs_position_gcrf(self, lat_deg, lon_deg, time_utc, alt_m=0.0):
         """
-        Get ground station position in GCRF coordinates
-        # NOTE: ?
+        Get ground station position in GCRF coordinates at a specific time
+
+        IMPORTANT: GS position in GCRF changes over time due to Earth's rotation.
+        While GS is stationary in ECEF (Earth-Centered Earth-Fixed), GCRF is an
+        inertial frame, so the GS position vector in GCRF rotates with Earth.
+        Therefore, time_utc must match the satellite's time for accurate Doppler calculation.
 
         Args:
             lat_deg: Latitude in degrees
             lon_deg: Longitude in degrees
+            time_utc: Time as skyfield Time object (must match satellite time)
             alt_m: Altitude in meters (default: 0)
 
         Returns:
-            Position [x, y, z] in km in GCRF coordinates
+            Position [x, y, z] in km in GCRF coordinates at time_utc
         """
         # Create ground station location
         gs_location = wgs84.latlon(lat_deg, lon_deg, elevation_m=alt_m)
 
-        # Get position at a reference time
-        # For position only, any time works since GS is stationary in ECEF
-        t = self.ts.utc(2022, 1, 1, 0, 0, 0)
-
-        # Get geocentric position
-        geocentric = gs_location.at(t)
+        # Get position at the specified time
+        geocentric = gs_location.at(time_utc)
         position_km = geocentric.position.km
 
         return position_km
@@ -196,13 +235,14 @@ class DopplerCalculator:
         Returns:
             Tuple of (doppler_shift_hz, radial_velocity_m_s)
         """
-        # Get satellite state
+        # Get satellite state at time_utc
         sat_pos_km, sat_vel_km_s = self.get_satellite_state(satellite, time_utc)
 
-        # Get ground station position
-        gs_pos_km = self.get_gs_position_gcrf(gs_lat, gs_lon, gs_alt_m)
+        # Get ground station position at the SAME time_utc
+        # This is critical: both positions must be in the same time frame
+        gs_pos_km = self.get_gs_position_gcrf(gs_lat, gs_lon, time_utc, gs_alt_m)
 
-        # Calculate radial velocity
+        # Calculate radial velocity using time-synchronized positions
         radial_vel = self.calculate_radial_velocity(sat_pos_km, sat_vel_km_s, gs_pos_km)
 
         # Calculate Doppler shift

@@ -16,8 +16,9 @@ if __name__ == "__main__":
     # In this example, 25 satellites and 2 ground stations are one AS.
 
     AS = [[1, 27]]  # Node #1 to Node #27 are within the same AS.
-    GS_lat_long = [[50.110924, 8.682127], [46.635700, 14.311817]
-                   ]  # latitude and longitude of frankfurt and  Austria
+    GS_lat_long = [
+        [50.110924, 8.682127], [46.635700, 14.311817]
+    ]  # latitude and longitude of frankfurt and  Austria
     configuration_file_path = "./config.json"
     hello_interval = 1  # hello_interval(s) in OSPF. 1-200 are supported.
 

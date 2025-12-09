@@ -215,8 +215,7 @@ class RTMonitor:
         self.satellites = self._generate_satellites()
 
         # Store GS locations from StarryNet instance
-        # NOTE: ?
-        self.gs_locations = self.sn.observer.GS_lat_long if hasattr(self.sn, 'observer') else []
+        self.gs_locations = self.sn.observer.GS_lat_long
 
     def _generate_satellites(self):
         """
@@ -284,6 +283,9 @@ class RTMonitor:
 
             # Get current time for Doppler calculation
             # Use emulation time aligned with StarryNet's time
+            # NOTE: Key part to showcase "time fluctuation" traits
+            # if self.get_emulation_time() = 5 s,
+            # then we set time to 2022-01-01 01:00:05 UTC
             current_time = self.doppler_calc.ts.utc(2022, 1, 1, 1, 0, self.get_emulation_time())
 
             # Calculate Doppler shift
@@ -293,8 +295,7 @@ class RTMonitor:
 
             return doppler_hz
 
-        except Exception as e:
-            # If Doppler calculation fails, return None
+        except Exception:
             return None
 
     def measure_rtt(self, node1_index, node2_index):
