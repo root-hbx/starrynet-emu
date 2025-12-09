@@ -822,6 +822,19 @@ def sn_route(src, time_index, file_path, configuration_file_path,
 
 def sn_establish_new_GSL(container_id_list, matrix, constellation_size, bw,
                          loss, sat_index, GS_index, remote_ssh):
+    """
+    Establish a new GSL between sat_index and GS_index
+    
+    1. Create docker network bridge GSL_i-j
+    2. Connect satellite i to GSL_i-j
+        - get sat_name based on IP naming rule
+        - rename sat_name
+        - config TC rules on sat_name
+    3. Connect GS j to GSL_i-j
+        - same as sat_node mentioned above
+    4. Restart BIRD routing process in Sat_i and GS_j
+    """
+    
     i = sat_index
     j = GS_index
     # IP address  (there is a link between i and j)
@@ -829,83 +842,186 @@ def sn_establish_new_GSL(container_id_list, matrix, constellation_size, bw,
     address_16_23 = (j - constellation_size) & 0xff
     address_8_15 = i & 0xff
     GSL_name = "GSL_" + str(i) + "-" + str(j)
-    # Create internal network in docker.
+    
+    # ===============================================================
+    # Create internal network in docker. [NetBridge name: GSL_i-j]
+    # ===============================================================
     sn_remote_cmd(
         remote_ssh, 'docker network create ' + GSL_name + " --subnet 9." +
         str(address_16_23) + "." + str(address_8_15) + ".0/24")
     print('[Create GSL:]' + 'docker network create ' + GSL_name +
           " --subnet 9." + str(address_16_23) + "." + str(address_8_15) +
           ".0/24")
+
+    # ===============================================================
+    # Connect satellite to GSL
+    # ===============================================================
+
+    # ---------------------------------------------------------------
+    # (1) Connect satellite node [.50]
+    # ---------------------------------------------------------------
     sn_remote_cmd(
         remote_ssh, 'docker network connect ' + GSL_name + " " +
         str(container_id_list[i - 1]) + " --ip 9." + str(address_16_23) + "." +
         str(address_8_15) + ".50")
+
+    # ---------------------------------------------------------------
+    # (2) Get interface name by SatIP (removed -it to avoid TTY issues)
+    # ---------------------------------------------------------------
     ifconfig_output = sn_remote_cmd(
-        remote_ssh, "docker exec -it " + str(container_id_list[i - 1]) +
+        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
         " ip addr | grep -B 2 9." + str(address_16_23) + "." +
         str(address_8_15) +
-        ".50 | head -n 1 | awk -F: '{ print $2 }' | tr -d [:blank:]")
-    target_interface = str(ifconfig_output[0]).split("@")[0]
+        ".50 | head -n 1 | awk -F: '{ print $2 }' | tr -d '[:blank:]'")
+    
+    # prev format: eth8@if9 [auto-fetch. named by original docker]
+    target_interface = str(ifconfig_output[0]).split("@")[0].strip()
+    # new format: B5-eth27 [sat-5 -> gs-27]
+    new_interface_sat = "B" + str(i) + "-eth" + str(j)
+    # renaming satellite interface
+    print(f'[Rename SAT interface:] {target_interface} -> {new_interface_sat}')
+
+    # ---------------------------------------------------------------
+    # (3) Rename satellite interface (removed -d to capture errors)
+    # ---------------------------------------------------------------
+    # [3.1] DOWN interface
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[i - 1]) +
+        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
         " ip link set dev " + target_interface + " down")
+    # [3.2] Rename interface
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[i - 1]) +
-        " ip link set dev " + target_interface + " name " + "B" +
-        str(i - 1 + 1) + "-eth" + str(j))
+        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
+        " ip link set dev " + target_interface + " name " + new_interface_sat)
+    # Verify rename succeeded
+    verify_result = sn_remote_cmd(
+        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
+        " ip link show " + new_interface_sat + " 2>&1")
+
+    if verify_result and "does not exist" not in str(verify_result):
+        print(f'[Success:] Interface renamed to {new_interface_sat}')
+    else:
+        print(f'[ERROR:] Failed to rename interface to {new_interface_sat}, retrying...')
+        # Rollback to original name
+        new_interface_sat = target_interface
+    # [3.3] UP interface
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[i - 1]) +
-        " ip link set dev B" + str(i - 1 + 1) + "-eth" + str(j) + " up")
+        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
+        " ip link set dev " + new_interface_sat + " up")
+
+    # ---------------------------------------------------------------
+    # (4) Configure TC rules
+    # ---------------------------------------------------------------
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[i - 1]) +
-        " tc qdisc add dev B" + str(i - 1 + 1) + "-eth" + str(j) +
-        " root netem delay " + str(delay) + "ms")
+        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
+        " tc qdisc add dev " + new_interface_sat +
+        " root netem delay " + str(delay) + "ms") # delay
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[i - 1]) +
-        " tc qdisc add dev B" + str(i - 1 + 1) + "-eth" + str(j) +
-        " root netem loss " + str(loss) + "%")
+        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
+        " tc qdisc add dev " + new_interface_sat +
+        " root netem loss " + str(loss) + "%") # pkt loss rate
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[i - 1]) +
-        " tc qdisc add dev B" + str(i - 1 + 1) + "-eth" + str(j) +
-        " root netem rate " + str(bw) + "Gbps")
+        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
+        " tc qdisc add dev " + new_interface_sat +
+        " root netem rate " + str(bw) + "Gbps") # bw
+
     print('[Add current node:]' + 'docker network connect ' + GSL_name + " " +
           str(container_id_list[i - 1]) + " --ip 10." + str(address_16_23) +
           "." + str(address_8_15) + ".50")
+
+    # ===============================================================
+    # Connect GS to GSL
+    # ===============================================================
+
+    # ---------------------------------------------------------------
+    # (1) Connect GS node [.60]
+    # ---------------------------------------------------------------
     sn_remote_cmd(
         remote_ssh, 'docker network connect ' + GSL_name + " " +
         str(container_id_list[j - 1]) + " --ip 9." + str(address_16_23) + "." +
         str(address_8_15) + ".60")
+
+    # ---------------------------------------------------------------
+    # (2) Get GS interface name by GroundStationIP
+    # ---------------------------------------------------------------
     ifconfig_output = sn_remote_cmd(
-        remote_ssh, "docker exec -it " + str(container_id_list[j - 1]) +
+        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
         " ip addr | grep -B 2 9." + str(address_16_23) + "." +
         str(address_8_15) +
-        ".60 | head -n 1 | awk -F: '{ print $2 }' | tr -d [:blank:]")
-    target_interface = str(ifconfig_output[0]).split("@")[0]
+        ".60 | head -n 1 | awk -F: '{ print $2 }' | tr -d '[:blank:]'")
+    # prev format: eth8@if9 [auto-fetch. named by original docker]
+    target_interface = str(ifconfig_output[0]).split("@")[0].strip()
+    # new format: B27-eth5 [gs-27 -> sat-5]
+    new_interface_gs = "B" + str(j) + "-eth" + str(i)
+    # renaming GS interface
+    print(f'[Rename GS interface:] {target_interface} -> {new_interface_gs}')
+
+    # ---------------------------------------------------------------
+    # (3) Rename GS interface (removed -d to capture errors)
+    # ---------------------------------------------------------------
+    # [3.1] DOWN GS interface
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[j - 1]) +
+        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
         " ip link set dev " + target_interface + " down")
+    # [3.2] Rename interface
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[j - 1]) +
-        " ip link set dev " + target_interface + " name " + "B" + str(j) +
-        "-eth" + str(i - 1 + 1))
+        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
+        " ip link set dev " + target_interface + " name " + new_interface_gs)
+    # Verify rename succeeded
+    verify_result = sn_remote_cmd(
+        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
+        " ip link show " + new_interface_gs + " 2>&1")
+
+    if verify_result and "does not exist" not in str(verify_result):
+        print(f'[Success:] Interface renamed to {new_interface_gs}')
+    else:
+        print(f'[ERROR:] Failed to rename interface to {new_interface_gs}, retrying...')
+        # Rollback to original name
+        new_interface_gs = target_interface
+    # [3.3] UP interface
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[j - 1]) +
-        " ip link set dev B" + str(j) + "-eth" + str(i - 1 + 1) + " up")
+        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
+        " ip link set dev " + new_interface_gs + " up")
+
+    # ---------------------------------------------------------------
+    # (4) Configure TC rules
+    # ---------------------------------------------------------------
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[j - 1]) +
-        " tc qdisc add dev B" + str(j) + "-eth" + str(i - 1 + 1) +
-        " root netem delay " + str(delay) + "ms")
+        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
+        " tc qdisc add dev " + new_interface_gs +
+        " root netem delay " + str(delay) + "ms") # delay
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[j - 1]) +
-        " tc qdisc add dev B" + str(j) + "-eth" + str(i - 1 + 1) +
-        " root netem loss " + str(loss) + "%")
+        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
+        " tc qdisc add dev " + new_interface_gs +
+        " root netem loss " + str(loss) + "%") # pkt loss rate
     sn_remote_cmd(
-        remote_ssh, "docker exec -d " + str(container_id_list[j - 1]) +
-        " tc qdisc add dev B" + str(j) + "-eth" + str(i - 1 + 1) +
-        " root netem rate " + str(bw) + "Gbps")
+        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
+        " tc qdisc add dev " + new_interface_gs +
+        " root netem rate " + str(bw) + "Gbps") # bw
+
     print('[Add right node:]' + 'docker network connect ' + GSL_name + " " +
           str(container_id_list[j - 1]) + " --ip 10." + str(address_16_23) +
           "." + str(address_8_15) + ".60")
+    
+    # ===============================================================
+    # Restart BIRD on both nodes to recognize new interfaces
+    # ===============================================================
+    print(f'[Restarting BIRD:] SAT-{i} and GS-{j}')
+    # Restart BIRD daemon on SatNode
+    sn_remote_cmd(
+        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
+        " pkill -9 bird 2>/dev/null")
+    sn_remote_cmd(
+        remote_ssh, "docker exec -d " + str(container_id_list[i - 1]) +
+        " bird -c B" + str(i) + ".conf")
+    # Restart BIRD daemon on GSNode
+    sn_remote_cmd(
+        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
+        " pkill -9 bird 2>/dev/null")
+    sn_remote_cmd(
+        remote_ssh, "docker exec -d " + str(container_id_list[j - 1]) +
+        " bird -c B" + str(j) + ".conf")
+
+    print(f'[GSL established:] SAT-{i} <-> GS-{j}')
 
 
 def sn_del_link(first_index, second_index, container_id_list, remote_ssh):
