@@ -119,6 +119,37 @@ class RTLogger:
         with open(log_file, 'a') as f:
             f.write(path_line)
 
+    @staticmethod
+    def log_segment_rtt(log_file, node1_index, node2_index, rtt, direction="GS-Sat"):
+        """
+        Log GSL / ISL RTT measurement
+
+        Args:
+            log_file: Path to log file
+            gs_index: Ground station index
+            sat_index: Satellite index
+            rtt: RTT value in milliseconds (None if failed)
+            direction: "GS-Sat" or "Sat-GS" or "Sat-Sat"
+        """
+        if direction == "GS-Sat":
+            if rtt is not None:
+                log_line = f"{direction}: RTT(gs-{node1_index}, sat-{node2_index}): {rtt:.3f} ms\n"
+            else:
+                log_line = f"{direction}: RTT(gs-{node1_index}, sat-{node2_index}): FAILED\n"
+        elif direction == "Sat-GS":
+            if rtt is not None:
+                log_line = f"{direction}: RTT(sat-{node2_index}, gs-{node1_index}): {rtt:.3f} ms\n"
+            else:
+                log_line = f"{direction}: RTT(sat-{node2_index}, gs-{node1_index}): FAILED\n"
+        else:
+            if rtt is not None:
+                log_line = f"ISL: RTT(sat-{node1_index}, sat-{node2_index}): {rtt:.3f} ms\n"
+            else:
+                log_line = f"ISL: RTT(sat-{node1_index}, sat-{node2_index}): FAILED\n"
+
+        with open(log_file, 'a') as f:
+            f.write(log_line)
+
 
 class RTParser:
     """Parser for real-time monitoring - handles parsing of network command outputs"""
@@ -370,6 +401,19 @@ class RTMonitor:
         if node1_type == "gs" and node2_type == "gs":
             src_sat, dst_sat = self.get_gs_access_sat_from_route(node1_index, node2_index)
             RTLogger.log_gs_path(self.log_file, node1_index, node2_index, src_sat, dst_sat)
+
+            # Measure and log GS-Sat (GSL) RTT
+            if src_sat is not None:
+                gs_sat_rtt = self.measure_rtt(node1_index, src_sat)
+                RTLogger.log_segment_rtt(self.log_file, node1_index, src_sat, gs_sat_rtt, "GS-Sat")
+
+            if dst_sat is not None:
+                sat_gs_rtt = self.measure_rtt(node2_index, dst_sat)
+                RTLogger.log_segment_rtt(self.log_file, node2_index, dst_sat, sat_gs_rtt, "Sat-GS")
+            # Measure and log Sat-Sat (ISL) RTT
+            if src_sat is not None and dst_sat is not None:
+                sat_sat_rtt = self.measure_rtt(src_sat, dst_sat)
+                RTLogger.log_segment_rtt(self.log_file, src_sat, dst_sat, sat_sat_rtt, "Sat-Sat")
 
     def monitor_loop(self, interval=5, node_pairs=None):
         """
