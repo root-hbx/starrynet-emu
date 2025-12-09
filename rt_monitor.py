@@ -215,11 +215,13 @@ class RTMonitor:
         self.satellites = self._generate_satellites()
 
         # Store GS locations from StarryNet instance
+        # NOTE: ?
         self.gs_locations = self.sn.observer.GS_lat_long if hasattr(self.sn, 'observer') else []
 
     def _generate_satellites(self):
         """
         Generate satellite objects for all satellites in the constellation
+        Aligns with the constellation generation in sn_observer.py
 
         Returns:
             List of EarthSatellite objects
@@ -232,16 +234,15 @@ class RTMonitor:
         inclination = self.sn.inclination
         altitude_km = self.sn.satellite_altitude
 
-        # Phase shift parameter (F parameter in sn_observer.py)
+        # Phase shift parameter (align with F in sn_observer.py)
         F = 18
         num_of_sat = orbit_num * sat_num
 
         # Generate satellites using same logic as sn_observer.py
         for i in range(orbit_num):
-            raan = i / orbit_num * 360  # degrees
+            raan = i / orbit_num * 360
             for j in range(sat_num):
-                mean_anomaly = (j * 360 / sat_num + i * 360 * F / num_of_sat) % 360  # degrees
-
+                mean_anomaly = (j * 360 / sat_num + i * 360 * F / num_of_sat) % 360 
                 satellite = self.doppler_calc.generate_satellite_from_orbital_params(
                     inclination=inclination,
                     altitude_km=altitude_km,

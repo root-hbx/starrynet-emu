@@ -21,7 +21,7 @@ class DopplerCalculator:
     EARTH_RADIUS = 6371.0  # km
 
     # Default carrier frequency for 5G NTN (Ku-band)
-    # Reference: 3GPP TR 38.811
+    # Reference: Wikipedia https://en.wikipedia.org/wiki/Ku_band
     DEFAULT_CARRIER_FREQ_HZ = 14.0e9  # 14 GHz (Ku-band downlink)
 
     def __init__(self, carrier_frequency_hz=None):
@@ -33,20 +33,6 @@ class DopplerCalculator:
         """
         self.carrier_freq = carrier_frequency_hz or self.DEFAULT_CARRIER_FREQ_HZ
         self.ts = load.timescale()
-
-    def generate_satellite_from_tle(self, tle_line1, tle_line2, sat_name="SAT"):
-        """
-        Generate EarthSatellite object from TLE lines
-
-        Args:
-            tle_line1: First line of TLE
-            tle_line2: Second line of TLE
-            sat_name: Satellite name
-
-        Returns:
-            EarthSatellite object
-        """
-        return EarthSatellite(tle_line1, tle_line2, sat_name, self.ts)
 
     def generate_satellite_from_orbital_params(self, inclination, altitude_km,
                                                mean_anomaly, raan, sat_id=0):
@@ -142,7 +128,7 @@ class DopplerCalculator:
             Doppler shift in Hz
         """
         # Doppler shift formula: f_d = (v_r / c) * f_c
-        # Negative radial velocity (approaching) causes positive frequency shift
+        # "-" means that when the satellite is approaching (-10 -> -100), the frequency increases
         doppler_shift = -(radial_velocity_m_s / self.SPEED_OF_LIGHT) * self.carrier_freq
 
         return doppler_shift
@@ -172,6 +158,7 @@ class DopplerCalculator:
     def get_gs_position_gcrf(self, lat_deg, lon_deg, alt_m=0.0):
         """
         Get ground station position in GCRF coordinates
+        # NOTE: ?
 
         Args:
             lat_deg: Latitude in degrees
@@ -240,40 +227,3 @@ def format_doppler_shift(doppler_hz):
         return f"{doppler_hz/1e3:.3f} kHz"
     else:
         return f"{doppler_hz:.3f} Hz"
-
-
-if __name__ == "__main__":
-    # Test the Doppler calculator
-    print("Testing Doppler Shift Calculator")
-    print("=" * 60)
-
-    # Create calculator with Ku-band frequency
-    calc = DopplerCalculator(carrier_frequency_hz=14e9)
-
-    # Test with orbital parameters (Starlink-like orbit)
-    print("\nTest 1: Using orbital parameters")
-    satellite = calc.generate_satellite_from_orbital_params(
-        inclination=53.0,  # degrees
-        altitude_km=550.0,
-        mean_anomaly=0.0,
-        raan=0.0,
-        sat_id=1
-    )
-
-    # Frankfurt coordinates
-    gs_lat = 50.110924
-    gs_lon = 8.682127
-
-    # Calculate for current time
-    t = calc.ts.now()
-    doppler_hz, radial_vel = calc.calculate_doppler_for_gsl(
-        satellite, gs_lat, gs_lon, t
-    )
-
-    print(f"Ground Station: Frankfurt ({gs_lat:.4f}°, {gs_lon:.4f}°)")
-    print(f"Radial Velocity: {radial_vel:.3f} m/s")
-    print(f"Doppler Shift: {format_doppler_shift(doppler_hz)}")
-    print(f"               ({doppler_hz:.2f} Hz)")
-
-    print("\n" + "=" * 60)
-    print("Test completed successfully!")
