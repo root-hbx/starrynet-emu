@@ -9,6 +9,7 @@ import threading
 import time
 import re
 from datetime import datetime
+from doppler_calculator import DopplerCalculator, format_doppler_shift
 
 
 class RTLogger:
@@ -120,9 +121,9 @@ class RTLogger:
             f.write(path_line)
 
     @staticmethod
-    def log_segment_rtt(log_file, node1_index, node2_index, rtt, direction="GS-Sat"):
+    def log_segment_rtt(log_file, node1_index, node2_index, rtt, direction="GS-Sat", doppler_shift_hz=None):
         """
-        Log GSL / ISL RTT measurement
+        Log GSL / ISL RTT measurement with optional Doppler shift
 
         Args:
             log_file: Path to log file
@@ -130,15 +131,22 @@ class RTLogger:
             sat_index: Satellite index
             rtt: RTT value in milliseconds (None if failed)
             direction: "GS-Sat" or "Sat-GS" or "Sat-Sat"
+            doppler_shift_hz: Doppler shift in Hz (None if not applicable or GSL only)
         """
         if direction == "GS-Sat":
             if rtt is not None:
-                log_line = f"{direction}: RTT(gs-{node1_index}, sat-{node2_index}): {rtt:.3f} ms\n"
+                log_line = f"{direction}: RTT(gs-{node1_index}, sat-{node2_index}): {rtt:.3f} ms"
+                if doppler_shift_hz is not None:
+                    log_line += f", Doppler Shift: {format_doppler_shift(doppler_shift_hz)}"
+                log_line += "\n"
             else:
                 log_line = f"{direction}: RTT(gs-{node1_index}, sat-{node2_index}): FAILED\n"
         elif direction == "Sat-GS":
             if rtt is not None:
-                log_line = f"{direction}: RTT(sat-{node2_index}, gs-{node1_index}): {rtt:.3f} ms\n"
+                log_line = f"{direction}: RTT(sat-{node2_index}, gs-{node1_index}): {rtt:.3f} ms"
+                if doppler_shift_hz is not None:
+                    log_line += f", Doppler Shift: {format_doppler_shift(doppler_shift_hz)}"
+                log_line += "\n"
             else:
                 log_line = f"{direction}: RTT(sat-{node2_index}, gs-{node1_index}): FAILED\n"
         else:
@@ -175,13 +183,14 @@ class RTParser:
 class RTMonitor:
     """Real-time monitor for StarryNet emulation"""
 
-    def __init__(self, starrynet_instance, log_file=None):
+    def __init__(self, starrynet_instance, log_file=None, carrier_frequency_hz=None):
         """
         Initialize the real-time monitor
 
         Args:
             starrynet_instance: StarryNet instance to monitor
             log_file: Path to log file (default: ./rt_log_<timestamp>.txt)
+            carrier_frequency_hz: Carrier frequency for Doppler calculation (default: 14 GHz)
         """
         self.sn = starrynet_instance
         self.running = False
@@ -198,6 +207,94 @@ class RTMonitor:
 
         # Initialize log file using RTLogger
         RTLogger.initialize_log(self.log_file)
+
+        # Initialize Doppler calculator
+        self.doppler_calc = DopplerCalculator(carrier_frequency_hz)
+
+        # Generate satellite objects for Doppler calculation
+        self.satellites = self._generate_satellites()
+
+        # Store GS locations from StarryNet instance
+        self.gs_locations = self.sn.observer.GS_lat_long if hasattr(self.sn, 'observer') else []
+
+    def _generate_satellites(self):
+        """
+        Generate satellite objects for all satellites in the constellation
+
+        Returns:
+            List of EarthSatellite objects
+        """
+        satellites = []
+
+        # Get constellation parameters from StarryNet instance
+        orbit_num = self.sn.orbit_number
+        sat_num = self.sn.sat_number
+        inclination = self.sn.inclination
+        altitude_km = self.sn.satellite_altitude
+
+        # Phase shift parameter (F parameter in sn_observer.py)
+        F = 18
+        num_of_sat = orbit_num * sat_num
+
+        # Generate satellites using same logic as sn_observer.py
+        for i in range(orbit_num):
+            raan = i / orbit_num * 360  # degrees
+            for j in range(sat_num):
+                mean_anomaly = (j * 360 / sat_num + i * 360 * F / num_of_sat) % 360  # degrees
+
+                satellite = self.doppler_calc.generate_satellite_from_orbital_params(
+                    inclination=inclination,
+                    altitude_km=altitude_km,
+                    mean_anomaly=mean_anomaly,
+                    raan=raan,
+                    sat_id=i * sat_num + j
+                )
+                satellites.append(satellite)
+
+        return satellites
+
+    def calculate_doppler_shift_for_gsl(self, gs_index, sat_index):
+        """
+        Calculate Doppler shift for a ground-satellite link
+
+        Args:
+            gs_index: Ground station index (1-based, > constellation_size)
+            sat_index: Satellite index (1-based, <= constellation_size)
+
+        Returns:
+            Doppler shift in Hz, or None if calculation failed
+        """
+        try:
+            # Convert to 0-based indices
+            sat_idx = sat_index - 1
+            gs_idx = gs_index - self.sn.constellation_size - 1
+
+            # Check if satellite and GS indices are valid
+            if sat_idx < 0 or sat_idx >= len(self.satellites):
+                return None
+            if gs_idx < 0 or gs_idx >= len(self.gs_locations):
+                return None
+
+            # Get satellite object
+            satellite = self.satellites[sat_idx]
+
+            # Get GS location
+            gs_lat, gs_lon = self.gs_locations[gs_idx]
+
+            # Get current time for Doppler calculation
+            # Use emulation time aligned with StarryNet's time
+            current_time = self.doppler_calc.ts.utc(2022, 1, 1, 1, 0, self.get_emulation_time())
+
+            # Calculate Doppler shift
+            doppler_hz, _ = self.doppler_calc.calculate_doppler_for_gsl(
+                satellite, gs_lat, gs_lon, current_time
+            )
+
+            return doppler_hz
+
+        except Exception as e:
+            # If Doppler calculation fails, return None
+            return None
 
     def measure_rtt(self, node1_index, node2_index):
         """
@@ -402,14 +499,20 @@ class RTMonitor:
             src_sat, dst_sat = self.get_gs_access_sat_from_route(node1_index, node2_index)
             RTLogger.log_gs_path(self.log_file, node1_index, node2_index, src_sat, dst_sat)
 
-            # Measure and log GS-Sat (GSL) RTT
+            # Measure and log GS-Sat (GSL) RTT with Doppler shift
             if src_sat is not None:
                 gs_sat_rtt = self.measure_rtt(node1_index, src_sat)
-                RTLogger.log_segment_rtt(self.log_file, node1_index, src_sat, gs_sat_rtt, "GS-Sat")
+                # Calculate Doppler shift for GS-Sat link
+                doppler_shift = self.calculate_doppler_shift_for_gsl(node1_index, src_sat)
+                RTLogger.log_segment_rtt(self.log_file, node1_index, src_sat, gs_sat_rtt,
+                                        "GS-Sat", doppler_shift_hz=doppler_shift)
 
             if dst_sat is not None:
                 sat_gs_rtt = self.measure_rtt(node2_index, dst_sat)
-                RTLogger.log_segment_rtt(self.log_file, node2_index, dst_sat, sat_gs_rtt, "Sat-GS")
+                # Calculate Doppler shift for Sat-GS link
+                doppler_shift = self.calculate_doppler_shift_for_gsl(node2_index, dst_sat)
+                RTLogger.log_segment_rtt(self.log_file, node2_index, dst_sat, sat_gs_rtt,
+                                        "Sat-GS", doppler_shift_hz=doppler_shift)
             # Measure and log Sat-Sat (ISL) RTT
             if src_sat is not None and dst_sat is not None:
                 sat_sat_rtt = self.measure_rtt(src_sat, dst_sat)

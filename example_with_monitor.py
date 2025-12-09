@@ -8,7 +8,7 @@ Example with real-time monitoring enabled.
 from starrynet.sn_observer import *
 from starrynet.sn_orchestrater import *
 from starrynet.sn_synchronizer import *
-from rt_monitor import rt_monitor
+from rt_monitor import RTMonitor
 
 if __name__ == "__main__":
     # Starlink 5*5: 25 satellite nodes, 2 ground stations.
@@ -35,11 +35,12 @@ if __name__ == "__main__":
         (src_gs, dst_gs, "gs", "gs"),
     ]
 
-    # NOTE: Start monitoring with 3-second interval
-    monitor = rt_monitor(
-        sn, 
+    # NOTE: Start monitoring with 1-second interval
+    # S: 2Ghz | Ka: 30Ghz | Ku: 14Ghz
+    monitor = RTMonitor(sn, carrier_frequency_hz=30e9) # Ka
+    monitor.start(
         interval=1,
-        node_pairs=monitoring_pairs,
+        node_pairs=monitoring_pairs
     )
 
     sn.start_emulation()
