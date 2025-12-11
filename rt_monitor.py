@@ -297,13 +297,15 @@ class RTMonitor:
         except Exception:
             return None
 
-    def measure_rtt(self, node1_index, node2_index):
+    def measure_rtt(self, node1_index, node2_index, retries=3, timeout=3):
         """
-        Measure RTT between two nodes using ping
+        Measure RTT between two nodes using ping with retry logic
 
         Args:
             node1_index: Index of first node
             node2_index: Index of second node
+            retries: Number of ping packets to send (default: 3)
+            timeout: Timeout in seconds per packet (default: 3)
 
         Returns:
             RTT in milliseconds, or None if ping failed
@@ -316,15 +318,19 @@ class RTMonitor:
 
             target_ip = ip_list[0]
 
-            # Ping: node1 to node2. 1 pkt waits max 3 seconds
+            # Ping: node1 to node2. Send multiple packets with longer timeout
+            # -c: count (number of packets)
+            # -W: timeout per packet in seconds
+            # -i: interval between packets (0.2s for faster completion)
             container_id = self.sn.container_id_list[node1_index - 1]
-            cmd = f"docker exec {container_id} ping -c 1 -W 1 {target_ip}"
-    
+            cmd = f"docker exec {container_id} ping -c {retries} -W {timeout} -i 0.2 {target_ip}"
+
             result = self.sn.remote_ssh.exec_command(cmd, get_pty=True)
             stdin, stdout, stderr = result
             output = stdout.read().decode('utf-8')
 
             # Parse RTT from ping output using RTParser
+            # This will get the RTT from the first successful packet
             return RTParser.parse_ping_output(output)
 
         except Exception as e:
@@ -498,26 +504,32 @@ class RTMonitor:
 
         # If GS-to-GS, also log the path information using actual routing path
         if node1_type == "gs" and node2_type == "gs":
+            # IMPORTANT: Get path first, then immediately measure all segments
+            # to minimize timing window issues in dynamic LEO networks
             src_sat, dst_sat = self.get_gs_access_sat_from_route(node1_index, node2_index)
             RTLogger.log_gs_path(log_file, node1_index, node2_index, src_sat, dst_sat)
 
+            # Fast sequential measurement of all segments to reduce timing window
+            # Use retries=3 and timeout=3 to handle packet loss and transient issues
+
             # Measure and log GS-Sat (GSL) RTT with Doppler shift
             if src_sat is not None:
-                gs_sat_rtt = self.measure_rtt(node1_index, src_sat)
+                gs_sat_rtt = self.measure_rtt(node1_index, src_sat, retries=3, timeout=3)
                 # Calculate Doppler shift for GS-Sat link
                 doppler_shift = self.calculate_doppler_shift_for_gsl(node1_index, src_sat)
                 RTLogger.log_segment_rtt(log_file, node1_index, src_sat, gs_sat_rtt,
                                         "GS-Sat", doppler_shift_hz=doppler_shift)
 
             if dst_sat is not None:
-                sat_gs_rtt = self.measure_rtt(node2_index, dst_sat)
+                sat_gs_rtt = self.measure_rtt(node2_index, dst_sat, retries=3, timeout=3)
                 # Calculate Doppler shift for Sat-GS link
                 doppler_shift = self.calculate_doppler_shift_for_gsl(node2_index, dst_sat)
                 RTLogger.log_segment_rtt(log_file, node2_index, dst_sat, sat_gs_rtt,
                                         "Sat-GS", doppler_shift_hz=doppler_shift)
+            
             # Measure and log Sat-Sat (ISL) RTT
             if src_sat is not None and dst_sat is not None:
-                sat_sat_rtt = self.measure_rtt(src_sat, dst_sat)
+                sat_sat_rtt = self.measure_rtt(src_sat, dst_sat, retries=3, timeout=3)
                 RTLogger.log_segment_rtt(log_file, src_sat, dst_sat, sat_sat_rtt, "Sat-Sat")
 
     def monitor_loop(self, interval=5, node_pairs=None):

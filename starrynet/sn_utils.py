@@ -719,7 +719,11 @@ def sn_sr(src, des, target, container_id_list, remote_ssh):
     ifconfig_output = sn_remote_cmd(
         remote_ssh, "docker exec -it " + str(container_id_list[des - 1]) +
         " ifconfig | sed 's/[ \t].*//;/^\(eth0\|\)\(lo\|\)$/d'")
-    
+
+    if not ifconfig_output or len(ifconfig_output) == 0:
+        print(f'[ERROR:] Failed to get interface for node {des}')
+        return
+
     # dst node IP
     des_IP = sn_remote_cmd(
         remote_ssh,
@@ -757,6 +761,11 @@ def sn_ping(src, des, time_index, constellation_size, container_id_list,
         ifconfig_output = sn_remote_cmd(
             remote_ssh, "docker exec -it " + str(container_id_list[des - 1]) +
             " ifconfig | sed 's/[ \t].*//;/^\(eth0\|\)\(lo\|\)$/d'")
+
+        if not ifconfig_output or len(ifconfig_output) == 0:
+            print(f'[ERROR:] Failed to get interface for node {des} in sn_ping')
+            return
+
         des_IP = sn_remote_cmd(
             remote_ssh, "docker exec -it " + str(container_id_list[des - 1]) +
             " ifconfig " + ifconfig_output[0][:-1] +
@@ -783,6 +792,11 @@ def sn_perf(src, des, time_index, constellation_size, container_id_list,
         ifconfig_output = sn_remote_cmd(
             remote_ssh, "docker exec -it " + str(container_id_list[des - 1]) +
             " ifconfig | sed 's/[ \t].*//;/^\(eth0\|\)\(lo\|\)$/d'")
+
+        if not ifconfig_output or len(ifconfig_output) == 0:
+            print(f'[ERROR:] Failed to get interface for node {des} in sn_perf')
+            return
+
         des_IP = sn_remote_cmd(
             remote_ssh, "docker exec -it " + str(container_id_list[des - 1]) +
             " ifconfig " + ifconfig_output[0][:-1] +
@@ -868,14 +882,39 @@ def sn_establish_new_GSL(container_id_list, matrix, constellation_size, bw,
     # ---------------------------------------------------------------
     # (2) Get interface name by SatIP (removed -it to avoid TTY issues)
     # ---------------------------------------------------------------
-    ifconfig_output = sn_remote_cmd(
-        remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
-        " ip addr | grep -B 2 9." + str(address_16_23) + "." +
-        str(address_8_15) +
-        ".50 | head -n 1 | awk -F: '{ print $2 }' | tr -d '[:blank:]'")
-    
-    # prev format: eth8@if9 [auto-fetch. named by original docker]
-    target_interface = str(ifconfig_output[0]).split("@")[0].strip()
+    # Retry logic to handle timing issues - INCREASED retry count and delay
+    max_retries = 15  # Increased from 5 to 15
+    retry_delay = 1.0  # Increased from 0.5 to 1.0 seconds
+    target_interface = None
+
+    for attempt in range(max_retries):
+        # First verify the container is connected to the network
+        sn_remote_cmd(remote_ssh, 
+                f"docker network inspect {GSL_name} --format '{{{{range .Containers}}}}{{{{.Name}}}}{{{{end}}}}' 2>/dev/null")
+
+        ifconfig_output = sn_remote_cmd(
+            remote_ssh, "docker exec " + str(container_id_list[i - 1]) +
+            " ip addr | grep -B 2 9." + str(address_16_23) + "." +
+            str(address_8_15) +
+            ".50 | head -n 1 | awk -F: '{ print $2 }' | tr -d '[:blank:]'")
+
+        if ifconfig_output and len(ifconfig_output) > 0 and ifconfig_output[0].strip():
+            # prev format: eth8@if9 [auto-fetch. named by original docker]
+            target_interface = str(ifconfig_output[0]).split("@")[0].strip()
+            print(f'[DEBUG:] SAT interface found on attempt {attempt+1}: {target_interface}')
+            break
+        else:
+            if attempt < max_retries - 1:
+                print(f'[DEBUG:] SAT interface not found on attempt {attempt+1}, retrying...')
+                time.sleep(retry_delay)
+
+    if not target_interface:
+        print(f'[ERROR:] Failed to get SAT interface for IP 9.{address_16_23}.{address_8_15}.50 after {max_retries} attempts')
+        print(f'[ERROR:] This will cause GSL_{i}-{j} to be incomplete. Attempting cleanup...')
+        # Cleanup: remove the incomplete network
+        sn_remote_cmd(remote_ssh, f'docker network disconnect {GSL_name} {container_id_list[i - 1]} 2>/dev/null')
+        sn_remote_cmd(remote_ssh, f'docker network rm {GSL_name} 2>/dev/null')
+        return
     # new format: B5-eth27 [sat-5 -> gs-27]
     new_interface_sat = "B" + str(i) + "-eth" + str(j)
     # renaming satellite interface
@@ -943,13 +982,40 @@ def sn_establish_new_GSL(container_id_list, matrix, constellation_size, bw,
     # ---------------------------------------------------------------
     # (2) Get GS interface name by GroundStationIP
     # ---------------------------------------------------------------
-    ifconfig_output = sn_remote_cmd(
-        remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
-        " ip addr | grep -B 2 9." + str(address_16_23) + "." +
-        str(address_8_15) +
-        ".60 | head -n 1 | awk -F: '{ print $2 }' | tr -d '[:blank:]'")
-    # prev format: eth8@if9 [auto-fetch. named by original docker]
-    target_interface = str(ifconfig_output[0]).split("@")[0].strip()
+    # Retry logic to handle timing issues - INCREASED retry count and delay
+    max_retries = 15  # Increased from 5 to 15
+    retry_delay = 1.0  # Increased from 0.5 to 1.0 seconds
+    target_interface = None
+
+    for attempt in range(max_retries):
+        # First verify the container is connected to the network
+        sn_remote_cmd(remote_ssh, 
+                f"docker network inspect {GSL_name} --format '{{{{range .Containers}}}}{{{{.Name}}}}{{{{end}}}}' 2>/dev/null")
+
+        ifconfig_output = sn_remote_cmd(
+            remote_ssh, "docker exec " + str(container_id_list[j - 1]) +
+            " ip addr | grep -B 2 9." + str(address_16_23) + "." +
+            str(address_8_15) +
+            ".60 | head -n 1 | awk -F: '{ print $2 }' | tr -d '[:blank:]'")
+
+        if ifconfig_output and len(ifconfig_output) > 0 and ifconfig_output[0].strip():
+            # prev format: eth8@if9 [auto-fetch. named by original docker]
+            target_interface = str(ifconfig_output[0]).split("@")[0].strip()
+            print(f'[DEBUG:] GS interface found on attempt {attempt+1}: {target_interface}')
+            break
+        else:
+            if attempt < max_retries - 1:
+                print(f'[DEBUG:] GS interface not found on attempt {attempt+1}, retrying...')
+                time.sleep(retry_delay)
+
+    if not target_interface:
+        print(f'[ERROR:] Failed to get GS interface for IP 9.{address_16_23}.{address_8_15}.60 after {max_retries} attempts')
+        print(f'[ERROR:] This will cause GSL_{i}-{j} to be incomplete. Attempting cleanup...')
+        # Cleanup: disconnect both nodes and remove the network
+        sn_remote_cmd(remote_ssh, f'docker network disconnect {GSL_name} {container_id_list[i - 1]} 2>/dev/null')
+        sn_remote_cmd(remote_ssh, f'docker network disconnect {GSL_name} {container_id_list[j - 1]} 2>/dev/null')
+        sn_remote_cmd(remote_ssh, f'docker network rm {GSL_name} 2>/dev/null')
+        return
     # new format: B27-eth5 [gs-27 -> sat-5]
     new_interface_gs = "B" + str(j) + "-eth" + str(i)
     # renaming GS interface

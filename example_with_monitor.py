@@ -11,14 +11,22 @@ from starrynet.sn_synchronizer import *
 from rt_monitor import RTMonitor
 
 if __name__ == "__main__":
-    # Starlink 5*5: 25 satellite nodes, 2 ground stations.
-    # The node index sequence is: 25 sattelites, 2 ground stations.
-    # In this example, 25 satellites and 2 ground stations are one AS.
+    # Starlink 10*10: 100 satellite nodes, 6 ground stations.
+    # The node index sequence is: 100 sattelites, 6 ground stations.
+    # In this example, 100 satellites and 6 ground stations are one AS.
 
-    AS = [[1, 27]]  # Node #1 to Node #27 are within the same AS.
+    # Node #1 to Node #106 are within the same AS.
+    # 1-100: satellites, 101-106: ground stations
+    AS = [[1, 106]]
+    # latitude and longitude of frankfurt, Austria, Paris, London, New York, Beijing
     GS_lat_long = [
-        [50.110924, 8.682127], [46.635700, 14.311817]
-    ]  # latitude and longitude of frankfurt and  Austria
+        [50.110924, 8.682127],
+        [46.635700, 14.311817],
+        [48.856613, 2.352222],
+        [51.507351, -0.127758],
+        [40.712776, -74.005974],
+        [39.931910, 116.403112]
+    ]
     configuration_file_path = "./config.json"
     hello_interval = 1  # hello_interval(s) in OSPF. 1-200 are supported.
 
@@ -30,14 +38,17 @@ if __name__ == "__main__":
 
     # Start real-time monitoring after routing daemon is running
     # Demo: Multiple gs-gs pairs monitoring
-    src_gs_1 = 26
-    dst_gs_1 = 27
-    src_gs_2 = 27
-    dst_gs_2 = 26
+    src_gs_1 = 101
+    dst_gs_1 = 104
+    src_gs_2 = 102
+    dst_gs_2 = 105
+    src_gs_3 = 103
+    dst_gs_3 = 106
 
     monitoring_pairs = [
         (src_gs_1, dst_gs_1, "gs", "gs"),
         (src_gs_2, dst_gs_2, "gs", "gs"),
+        (src_gs_3, dst_gs_3, "gs", "gs")
     ]
 
     # NOTE: Start monitoring with 1-second interval
