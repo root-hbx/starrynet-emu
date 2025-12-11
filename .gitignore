@@ -59,5 +59,8 @@ __pycache__
 # Private config files
 config.json
 
+# Log directory for monitoring output
+log/
+
 # Experiment directories (format: {cons_name}-{orbit_number}-{sat_number}-{altitude}-{inclination}-{link_style}-{link_policy})
 *-*-*-*-*-*-*/

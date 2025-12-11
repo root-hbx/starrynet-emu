@@ -64,7 +64,7 @@ if __name__ == "__main__":
     # NOTE: Start monitoring with 1-second interval
     # S: 2Ghz | Ka: 30Ghz | Ku: 14Ghz
     # Each pair will have its own log file: rt_log_..._{src_gs}-{dst_gs}.txt
-    monitor = RTMonitor(sn, log_dir=".", carrier_frequency_hz=30e9)  # Ka
+    monitor = RTMonitor(sn, log_dir="./log", carrier_frequency_hz=30e9)  # Ka
     monitor.start(
         interval=1,
         node_pairs=monitoring_pairs

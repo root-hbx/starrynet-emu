@@ -8,6 +8,7 @@ Monitors RTT between nodes with both wall-clock time and emulation time
 import threading
 import time
 import re
+import os
 from datetime import datetime
 from .doppler_calculation import DopplerCalculator
 from .rt_logger import RTLogger
@@ -32,8 +33,9 @@ class RTMonitor:
         self.emulation_time = 0  # Track emulation time in seconds
         self.start_wall_time = None  # Wall clock time when emulation starts
 
-        # Store log directory
+        # Store log directory and ensure it exists
         self.log_dir = log_dir
+        os.makedirs(self.log_dir, exist_ok=True)
 
         # Dictionary to store log file paths for each node pair
         self.log_files_dict = {}
