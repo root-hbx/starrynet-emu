@@ -29,16 +29,21 @@ if __name__ == "__main__":
     sn.run_routing_deamon()
 
     # Start real-time monitoring after routing daemon is running
-    # Demo: gs -> constellation -> gs
-    src_gs = 26
-    dst_gs = 27
+    # Demo: Multiple gs-gs pairs monitoring
+    src_gs_1 = 26
+    dst_gs_1 = 27
+    src_gs_2 = 27
+    dst_gs_2 = 26
+
     monitoring_pairs = [
-        (src_gs, dst_gs, "gs", "gs"),
+        (src_gs_1, dst_gs_1, "gs", "gs"),
+        (src_gs_2, dst_gs_2, "gs", "gs"),
     ]
 
     # NOTE: Start monitoring with 1-second interval
     # S: 2Ghz | Ka: 30Ghz | Ku: 14Ghz
-    monitor = RTMonitor(sn, carrier_frequency_hz=30e9) # Ka
+    # Each pair will have its own log file: rt_log_..._{src_gs}-{dst_gs}.txt
+    monitor = RTMonitor(sn, log_dir=".", carrier_frequency_hz=30e9)  # Ka
     monitor.start(
         interval=1,
         node_pairs=monitoring_pairs

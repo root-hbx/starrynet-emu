@@ -183,13 +183,13 @@ class RTParser:
 class RTMonitor:
     """Real-time monitor for StarryNet emulation"""
 
-    def __init__(self, starrynet_instance, log_file=None, carrier_frequency_hz=None):
+    def __init__(self, starrynet_instance, log_dir=".", carrier_frequency_hz=None):
         """
         Initialize the real-time monitor
 
         Args:
             starrynet_instance: StarryNet instance to monitor
-            log_file: Path to log file (default: ./rt_log_<timestamp>.txt)
+            log_dir: Directory for log files (default: current directory)
             carrier_frequency_hz: Carrier frequency for Doppler calculation (default: 14 GHz)
         """
         self.sn = starrynet_instance
@@ -198,15 +198,14 @@ class RTMonitor:
         self.emulation_time = 0  # Track emulation time in seconds
         self.start_wall_time = None  # Wall clock time when emulation starts
 
-        # Generate log file name with timestamp if not provided
-        if log_file is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.log_file = f"./rt_log_{timestamp}.txt"
-        else:
-            self.log_file = log_file
+        # Store log directory
+        self.log_dir = log_dir
 
-        # Initialize log file using RTLogger
-        RTLogger.initialize_log(self.log_file)
+        # Dictionary to store log file paths for each node pair
+        self.log_files_dict = {}
+
+        # Store timestamp for generating log file names
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         # Initialize Doppler calculator
         self.doppler_calc = DopplerCalculator(carrier_frequency_hz)
@@ -482,11 +481,12 @@ class RTMonitor:
         except Exception:
             return None, None
 
-    def log_rtt(self, node1_index, node2_index, rtt, node1_type="sat", node2_type="sat"):
+    def log_rtt(self, log_file, node1_index, node2_index, rtt, node1_type="sat", node2_type="sat"):
         """
         Log RTT measurement to file with both wall-clock and emulation time
 
         Args:
+            log_file: Path to log file for this node pair
             node1_index: Index of first node
             node2_index: Index of second node
             rtt: RTT value in milliseconds
@@ -494,31 +494,31 @@ class RTMonitor:
             node2_type: Type of node2 (sat/gs)
         """
         emu_time = self.get_emulation_time()
-        RTLogger.log_rtt(self.log_file, node1_index, node2_index, rtt, emu_time, node1_type, node2_type)
+        RTLogger.log_rtt(log_file, node1_index, node2_index, rtt, emu_time, node1_type, node2_type)
 
         # If GS-to-GS, also log the path information using actual routing path
         if node1_type == "gs" and node2_type == "gs":
             src_sat, dst_sat = self.get_gs_access_sat_from_route(node1_index, node2_index)
-            RTLogger.log_gs_path(self.log_file, node1_index, node2_index, src_sat, dst_sat)
+            RTLogger.log_gs_path(log_file, node1_index, node2_index, src_sat, dst_sat)
 
             # Measure and log GS-Sat (GSL) RTT with Doppler shift
             if src_sat is not None:
                 gs_sat_rtt = self.measure_rtt(node1_index, src_sat)
                 # Calculate Doppler shift for GS-Sat link
                 doppler_shift = self.calculate_doppler_shift_for_gsl(node1_index, src_sat)
-                RTLogger.log_segment_rtt(self.log_file, node1_index, src_sat, gs_sat_rtt,
+                RTLogger.log_segment_rtt(log_file, node1_index, src_sat, gs_sat_rtt,
                                         "GS-Sat", doppler_shift_hz=doppler_shift)
 
             if dst_sat is not None:
                 sat_gs_rtt = self.measure_rtt(node2_index, dst_sat)
                 # Calculate Doppler shift for Sat-GS link
                 doppler_shift = self.calculate_doppler_shift_for_gsl(node2_index, dst_sat)
-                RTLogger.log_segment_rtt(self.log_file, node2_index, dst_sat, sat_gs_rtt,
+                RTLogger.log_segment_rtt(log_file, node2_index, dst_sat, sat_gs_rtt,
                                         "Sat-GS", doppler_shift_hz=doppler_shift)
             # Measure and log Sat-Sat (ISL) RTT
             if src_sat is not None and dst_sat is not None:
                 sat_sat_rtt = self.measure_rtt(src_sat, dst_sat)
-                RTLogger.log_segment_rtt(self.log_file, src_sat, dst_sat, sat_sat_rtt, "Sat-Sat")
+                RTLogger.log_segment_rtt(log_file, src_sat, dst_sat, sat_sat_rtt, "Sat-Sat")
 
     def monitor_loop(self, interval=5, node_pairs=None):
         """
@@ -538,16 +538,23 @@ class RTMonitor:
                 (constellation_size + 1, constellation_size + 2, "gs", "gs"),  # gs-gs
             ]
 
-        # Log monitoring start using RTLogger
-        RTLogger.log_monitor_start(self.log_file, interval, len(node_pairs))
+        # Log monitoring start for each pair
+        for pair_key in self.log_files_dict:
+            log_file = self.log_files_dict[pair_key]
+            RTLogger.log_monitor_start(log_file, interval, 1)  # 1 pair per log file
 
         while self.running:
             for node1_idx, node2_idx, node1_type, node2_type in node_pairs:
                 if not self.running:
                     break
 
-                rtt = self.measure_rtt(node1_idx, node2_idx)
-                self.log_rtt(node1_idx, node2_idx, rtt, node1_type, node2_type)
+                # Get the log file for this pair
+                pair_key = (node1_idx, node2_idx, node1_type, node2_type)
+                log_file = self.log_files_dict.get(pair_key)
+
+                if log_file:
+                    rtt = self.measure_rtt(node1_idx, node2_idx)
+                    self.log_rtt(log_file, node1_idx, node2_idx, rtt, node1_type, node2_type)
 
             # Sleep for the specified interval
             time.sleep(interval)
@@ -564,6 +571,28 @@ class RTMonitor:
             print("Monitor is already running!")
             return
 
+        # Default monitoring pairs if not specified
+        if node_pairs is None:
+            constellation_size = self.sn.constellation_size
+            node_pairs = [
+                (1, 2, "sat", "sat"),  # sat-sat
+                (1, constellation_size + 1, "sat", "gs"),  # sat-gs
+                (constellation_size + 1, constellation_size + 2, "gs", "gs"),  # gs-gs
+            ]
+
+        # Create log files for each node pair
+        for node1_idx, node2_idx, node1_type, node2_type in node_pairs:
+            # Generate log file name based on node types and indices
+            log_filename = f"rt_log_{self.timestamp}_{node1_type}-{node1_idx}_{node2_type}-{node2_idx}.txt"
+            log_filepath = f"{self.log_dir}/{log_filename}"
+
+            # Store log file path in dictionary
+            pair_key = (node1_idx, node2_idx, node1_type, node2_type)
+            self.log_files_dict[pair_key] = log_filepath
+
+            # Initialize log file
+            RTLogger.initialize_log(log_filepath)
+
         # Record start time for emulation time calculation
         self.start_wall_time = time.time()
 
@@ -575,6 +604,12 @@ class RTMonitor:
         )
         self.monitor_thread.start()
 
+        # Print info about created log files
+        print(f"Real-time monitor started with {len(node_pairs)} monitoring pairs:")
+        for pair_key, log_file in self.log_files_dict.items():
+            node1_idx, node2_idx, node1_type, node2_type = pair_key
+            print(f"  - {node1_type}-{node1_idx} <-> {node2_type}-{node2_idx}: {log_file}")
+
     def stop(self):
         """Stop the monitoring"""
         if not self.running:
@@ -585,13 +620,17 @@ class RTMonitor:
         if self.monitor_thread:
             self.monitor_thread.join(timeout=10)
 
-        # Log monitoring stop using RTLogger
-        RTLogger.log_monitor_stop(self.log_file)
+        # Log monitoring stop for each log file
+        for pair_key, log_file in self.log_files_dict.items():
+            RTLogger.log_monitor_stop(log_file)
 
-        print(f"Real-time monitor stopped. Log saved to {self.log_file}")
+        print(f"Real-time monitor stopped. Logs saved:")
+        for pair_key, log_file in self.log_files_dict.items():
+            node1_idx, node2_idx, node1_type, node2_type = pair_key
+            print(f"  - {node1_type}-{node1_idx} <-> {node2_type}-{node2_idx}: {log_file}")
 
 
-def rt_monitor(starrynet_instance, interval=5, node_pairs=None, log_file=None):
+def rt_monitor(starrynet_instance, interval=5, node_pairs=None, log_dir=".", carrier_frequency_hz=None):
     """
     Convenience function to create and start a real-time monitor
 
@@ -599,11 +638,12 @@ def rt_monitor(starrynet_instance, interval=5, node_pairs=None, log_file=None):
         starrynet_instance: The StarryNet instance to monitor
         interval: Monitoring interval in seconds (default: 5)
         node_pairs: List of (node1_index, node2_index, node1_type, node2_type) tuples to monitor
-        log_file: Path to log file (default: auto-generated)
+        log_dir: Directory for log files (default: current directory)
+        carrier_frequency_hz: Carrier frequency for Doppler calculation
 
     Returns:
         RTMonitor instance (already started)
     """
-    monitor = RTMonitor(starrynet_instance, log_file)
+    monitor = RTMonitor(starrynet_instance, log_dir, carrier_frequency_hz)
     monitor.start(interval, node_pairs)
     return monitor
