@@ -9,6 +9,7 @@ import threading
 import time
 import re
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, wait
 from doppler_calculator import DopplerCalculator, format_doppler_shift
 
 
@@ -520,9 +521,27 @@ class RTMonitor:
                 sat_sat_rtt = self.measure_rtt(src_sat, dst_sat)
                 RTLogger.log_segment_rtt(log_file, src_sat, dst_sat, sat_sat_rtt, "Sat-Sat")
 
+    def _measure_and_log_pair(self, log_file, node1_idx, node2_idx, node1_type, node2_type):
+        """
+        Measure and log RTT for a single pair (executed in parallel)
+
+        Args:
+            log_file: Log file path for this pair
+            node1_idx: Index of first node
+            node2_idx: Index of second node
+            node1_type: Type of first node
+            node2_type: Type of second node
+        """
+        try:
+            rtt = self.measure_rtt(node1_idx, node2_idx)
+            self.log_rtt(log_file, node1_idx, node2_idx, rtt, node1_type, node2_type)
+        except Exception as e:
+            # Log error but don't crash the monitoring thread
+            print(f"Error measuring RTT for pair ({node1_type}-{node1_idx}, {node2_type}-{node2_idx}): {e}")
+
     def monitor_loop(self, interval=5, node_pairs=None):
         """
-        Main monitoring loop
+        Main monitoring loop with parallel measurements for all pairs
 
         Args:
             interval: Monitoring interval in seconds (default: 5)
@@ -543,21 +562,34 @@ class RTMonitor:
             log_file = self.log_files_dict[pair_key]
             RTLogger.log_monitor_start(log_file, interval, 1)  # 1 pair per log file
 
-        while self.running:
-            for node1_idx, node2_idx, node1_type, node2_type in node_pairs:
-                if not self.running:
-                    break
+        # Use ThreadPoolExecutor for parallel measurements
+        # This ensures all pairs are measured at the same time
+        with ThreadPoolExecutor(max_workers=len(node_pairs)) as executor:
+            while self.running:
+                # Submit all measurement tasks in parallel
+                futures = []
+                for node1_idx, node2_idx, node1_type, node2_type in node_pairs:
+                    if not self.running:
+                        break
 
-                # Get the log file for this pair
-                pair_key = (node1_idx, node2_idx, node1_type, node2_type)
-                log_file = self.log_files_dict.get(pair_key)
+                    # Get the log file for this pair
+                    pair_key = (node1_idx, node2_idx, node1_type, node2_type)
+                    log_file = self.log_files_dict.get(pair_key)
 
-                if log_file:
-                    rtt = self.measure_rtt(node1_idx, node2_idx)
-                    self.log_rtt(log_file, node1_idx, node2_idx, rtt, node1_type, node2_type)
+                    if log_file:
+                        # Submit measurement task to thread pool
+                        future = executor.submit(
+                            self._measure_and_log_pair,
+                            log_file, node1_idx, node2_idx, node1_type, node2_type
+                        )
+                        futures.append(future)
 
-            # Sleep for the specified interval
-            time.sleep(interval)
+                # Wait for all measurements to complete before next interval
+                # This ensures all pairs are measured simultaneously
+                wait(futures)
+
+                # Sleep for the specified interval
+                time.sleep(interval)
 
     def start(self, interval=5, node_pairs=None):
         """
