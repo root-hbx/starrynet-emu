@@ -58,3 +58,6 @@ __pycache__
 
 # Private config files
 config.json
+
+# Experiment directories
+starlink-5-5-550-53-grid-LeastDelay/
