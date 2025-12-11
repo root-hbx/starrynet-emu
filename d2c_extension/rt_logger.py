@@ -154,3 +154,34 @@ class RTLogger:
 
         with open(log_file, 'a') as f:
             f.write(log_line)
+
+    @staticmethod
+    def log_timestamp(log_file, emu_time):
+        """
+        Log timestamp marker
+
+        Args:
+            log_file: Path to log file
+            emu_time: Emulation time in seconds
+        """
+        with open(log_file, 'a') as f:
+            f.write(f"[T={emu_time:04d}s]\n")
+
+    @staticmethod
+    def log_gs_gs_accumulated_rtt(log_file, src_gs, dst_gs, total_rtt):
+        """
+        Log accumulated GS-to-GS RTT from segment RTTs
+
+        Args:
+            log_file: Path to log file
+            src_gs: Source GS index
+            dst_gs: Destination GS index
+            total_rtt: Accumulated total RTT in milliseconds (None if any segment failed)
+        """
+        if total_rtt is not None:
+            log_line = f"GS-GS: RTT(gs-{src_gs}, gs-{dst_gs}): {total_rtt:.1f} ms\n"
+        else:
+            log_line = f"GS-GS: RTT(gs-{src_gs}, gs-{dst_gs}): FAILED\n"
+
+        with open(log_file, 'a') as f:
+            f.write(log_line)

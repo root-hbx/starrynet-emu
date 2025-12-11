@@ -334,10 +334,12 @@ class RTMonitor:
             node2_type: Type of node2 (sat/gs)
         """
         emu_time = self.get_emulation_time()
-        RTLogger.log_rtt(log_file, node1_index, node2_index, rtt, emu_time, node1_type, node2_type)
 
-        # If GS-to-GS, also log the path information using actual routing path
+        # If GS-to-GS, log path segments and accumulated RTT
         if node1_type == "gs" and node2_type == "gs":
+            # Log timestamp first
+            RTLogger.log_timestamp(log_file, emu_time)
+
             # IMPORTANT: Get path first, then immediately measure all segments
             # to minimize timing window issues in dynamic LEO networks
             src_sat, dst_sat = self.get_gs_access_sat_from_route(node1_index, node2_index)
@@ -345,6 +347,11 @@ class RTMonitor:
 
             # Fast sequential measurement of all segments to reduce timing window
             # Use retries=3 and timeout=3 to handle packet loss and transient issues
+
+            # Initialize segment RTTs
+            gs_sat_rtt = None
+            sat_gs_rtt = None
+            sat_sat_rtt = None
 
             # Measure and log GS-Sat (GSL) RTT with Doppler shift
             if src_sat is not None:
@@ -365,6 +372,18 @@ class RTMonitor:
             if src_sat is not None and dst_sat is not None:
                 sat_sat_rtt = self.measure_rtt(src_sat, dst_sat, retries=3, timeout=3)
                 RTLogger.log_segment_rtt(log_file, src_sat, dst_sat, sat_sat_rtt, "Sat-Sat")
+
+            # Calculate and log accumulated GS-GS RTT from segments
+            # Only when all segments are available can we calculate total RTT
+            # else, log as FAILED
+            total_rtt = None
+            if gs_sat_rtt is not None and sat_gs_rtt is not None and sat_sat_rtt is not None:
+                total_rtt = gs_sat_rtt + sat_gs_rtt + sat_sat_rtt
+
+            RTLogger.log_gs_gs_accumulated_rtt(log_file, node1_index, node2_index, total_rtt)
+        else:
+            # For non-GS-to-GS links (sat-sat, sat-gs), use original logic
+            RTLogger.log_rtt(log_file, node1_index, node2_index, rtt, emu_time, node1_type, node2_type)
 
     def monitor_loop(self, interval=5, node_pairs=None):
         """
